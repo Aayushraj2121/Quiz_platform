@@ -104,3 +104,32 @@ Login is rate limited to 10 attempts per 15 minutes per client window. JWTs
 are signed with `JWT_SECRET` and expire after eight hours. Logout is stateless:
 the client must discard its token. A future token revocation mechanism can be
 added if required by the deployment model.
+
+## Stage 5 API
+
+Session administration requires the same admin bearer token:
+
+- `POST /api/sessions` with `{"quizId":"<published-quiz-id>"}`
+- `GET /api/sessions?page=1&pageSize=20`
+- `GET /api/sessions/:id`
+- `PATCH /api/sessions/:id/status` with `{"status":"QUESTION"}`
+
+Only published quizzes with at least one valid question can create a session.
+Each session receives a unique six-digit numeric PIN. Valid administrative
+status transitions are enforced by the `SessionStatus` state machine; this
+stage does not start timers or gameplay.
+
+Participants join a lobby publicly:
+
+```bash
+curl -X POST http://127.0.0.1:4000/api/sessions/join/123456 \
+  -H 'Content-Type: application/json' \
+  -d '{"displayName":"Alice","email":"alice@example.com","studentId":"S-1"}'
+```
+
+The join response contains only the session's public ID/PIN/status/quiz title
+and the joining participant's safe fields. Display names are unique within a
+session and concurrent duplicate joins are rejected by the database constraint.
+There is no configured participant-limit field in the current schema, so no
+limit is enforced in this stage. Join attempts are rate limited to 30 per
+15-minute client window.

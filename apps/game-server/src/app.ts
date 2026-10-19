@@ -9,6 +9,7 @@ import { healthRouter } from './routes/health.js';
 import { createAdminRouter } from './routes/admin.js';
 import { createQuestionRouter } from './routes/questions.js';
 import { createQuizRouter } from './routes/quizzes.js';
+import { createSessionRouter } from './routes/sessions.js';
 
 export const createApp = (prisma: PrismaClient = defaultPrisma) => {
   const app = express();
@@ -28,6 +29,7 @@ export const createApp = (prisma: PrismaClient = defaultPrisma) => {
   app.use('/api/admin', createAdminRouter(prisma));
   app.use('/api/quizzes', createQuizRouter(prisma));
   app.use('/api/questions', createQuestionRouter(prisma));
+  app.use('/api/sessions', createSessionRouter(prisma));
   app.use(notFoundHandler);
   app.use(errorHandler);
 
