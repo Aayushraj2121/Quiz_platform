@@ -62,6 +62,9 @@ export const deleteQuestion = (token: string, questionId: string) =>
 export const createSession = (token: string, quizId: string) =>
   request<AdminSession>('/sessions', { method: 'POST', headers: auth(token), body: JSON.stringify({ quizId }) });
 
+export const deleteSession = (token: string, sessionId: string) =>
+  request<{ id: string; deleted: boolean }>(`/sessions/${sessionId}`, { method: 'DELETE', headers: auth(token) });
+
 export const getSessionResults = (token: string, sessionId: string) =>
   request<SessionResults>(`/results/${sessionId}`, { headers: auth(token) });
 

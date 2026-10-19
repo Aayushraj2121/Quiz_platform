@@ -8,11 +8,11 @@ import { env } from '../config/env.js';
 import { finalizeQuestion, getLeaderboard } from '../services/scoring-service.js';
 import { issueSessionCertificates } from '../services/certificate-service.js';
 
-const sessionPayload = z.object({ sessionId: z.string().cuid() });
+const sessionPayload = z.object({ sessionId: z.string().min(1) });
 const questionStartPayload = sessionPayload.extend({ questionIndex: z.number().int().min(0) });
 const answerPayload = sessionPayload.extend({
-  questionId: z.string().cuid(),
-  optionId: z.string().cuid()
+  questionId: z.string().min(1),
+  optionId: z.string().min(1)
 });
 const advancePayload = sessionPayload.extend({
   questionIndex: z.number().int().min(0).optional(),
@@ -131,6 +131,20 @@ export class RealtimeGameServer {
   private readonly timers = new Map<string, { timeout: NodeJS.Timeout; interval: NodeJS.Timeout }>();
   private readonly flowTimers = new Map<string, NodeJS.Timeout>();
 
+  /**
+   * O(1) host socket lookup: sessionId → socketId.
+   * Replaces the O(N) full-socket-set scan that was used to notify the host
+   * of submitted answers and to trigger auto-advance after leaderboard delay.
+   */
+  private readonly hostSockets = new Map<string, string>();
+
+  /**
+   * O(1) participant socket lookup: participantId → socketId.
+   * Replaces the O(N) full-socket-set scan used to deliver personal
+   * reveal feedback after each question is scored.
+   */
+  private readonly participantSockets = new Map<string, string>();
+
   public constructor(private readonly prisma: PrismaClient, httpServer: HttpServer) {
     this.io = new Server(httpServer, {
       cors: { origin: env.CORS_ORIGINS, credentials: true },
@@ -186,6 +200,15 @@ export class RealtimeGameServer {
     } else {
       socket.emit('connection:ready', { role: socket.data.role });
     }
+
+    // Register participant socket for O(1) personal-feedback delivery.
+    if (socket.data.role === 'participant' && socket.data.participantId) {
+      this.participantSockets.set(socket.data.participantId, socket.id);
+      if (socket.data.sessionId) {
+        socket.join(roomFor(socket.data.sessionId));
+      }
+    }
+
     socket.on('host:join', (payload, ack) => void this.hostJoin(socket, payload, ack));
     socket.on('host:start-question', (payload, ack) => void this.startQuestion(socket, payload, ack));
     socket.on('host:reveal-answer', (payload, ack) => void this.revealAnswer(socket, payload, ack, 'manual'));
@@ -198,6 +221,21 @@ export class RealtimeGameServer {
     socket.on('participant:reconnect', (payload, ack) => void this.participantJoin(socket, payload, ack, true));
     socket.on('participant:submit-answer', (payload, ack) => void this.submitAnswer(socket, payload, ack));
     socket.on('leaderboard:request', (payload, ack) => void this.leaderboardRequest(socket, payload, ack));
+
+    // Clean up lookup maps on disconnect to avoid stale entries and memory leaks.
+    socket.on('disconnect', () => {
+      if (socket.data.role === 'participant' && socket.data.participantId) {
+        // Only remove if this socket is still the registered one (handles reconnects gracefully).
+        if (this.participantSockets.get(socket.data.participantId) === socket.id) {
+          this.participantSockets.delete(socket.data.participantId);
+        }
+      }
+      if (socket.data.role === 'host' && socket.data.sessionId) {
+        if (this.hostSockets.get(socket.data.sessionId) === socket.id) {
+          this.hostSockets.delete(socket.data.sessionId);
+        }
+      }
+    });
   }
 
   private async hostJoin(socket: QuizSocket, payload: { sessionId: string }, ack?: Ack): Promise<void> {
@@ -207,6 +245,10 @@ export class RealtimeGameServer {
     if (!session) return ackError(socket, ack, 'NOT_FOUND', 'Session not found');
     socket.join(roomFor(session.id));
     socket.data.sessionId = session.id;
+
+    // Register host socket for O(1) lookup by other event handlers.
+    this.hostSockets.set(session.id, socket.id);
+
     socket.emit('session:state', this.sessionState(session));
     const activeQuestion = await this.activeQuestionPayload(session.id);
     if (activeQuestion) socket.emit('question:started', activeQuestion);
@@ -224,7 +266,7 @@ export class RealtimeGameServer {
     if (!participant || !session) return ackError(socket, ack, 'NOT_FOUND', 'Session or participant not found');
     socket.join(roomFor(session.id));
     socket.emit('session:state', this.sessionState(session));
-    if (replayActive) {
+    if (replayActive || session.status === SessionStatus.QUESTION || session.status === SessionStatus.REVEAL) {
       const activeQuestion = await this.activeQuestionPayload(session.id);
       if (activeQuestion) socket.emit('question:started', activeQuestion);
     }
@@ -291,42 +333,44 @@ export class RealtimeGameServer {
   }
 
   private async revealSession(sessionId: string, reason: 'timer' | 'manual', socket?: QuizSocket, ack?: Ack): Promise<void> {
-    const result = await finalizeQuestion(this.prisma, sessionId, reason);
-    if (!result.finalized) {
-      ackSuccess(ack);
-      return;
-    }
-    this.clearTimer(sessionId);
-    const question = await this.prisma.question.findUnique({
-      where: { id: result.questionId },
-      select: { id: true, explanation: true, options: { where: { isCorrect: true }, select: { id: true } } }
-    });
-    const correctOption = question?.options[0];
-    if (!question || !correctOption) {
-      return ackError(socket, ack, 'INVALID_QUESTION', 'Question answer is unavailable');
-    }
-    const updated = await this.prisma.gameSession.findUnique({
-      where: { id: sessionId },
-      select: { id: true, status: true, currentQuestionIndex: true, currentQuestionDeadline: true }
-    });
-    if (!updated) return ackError(socket, ack, 'NOT_FOUND', 'Session not found');
-    this.io.to(roomFor(sessionId)).emit('question:ended', { questionId: question.id, reason });
-    this.io.to(roomFor(sessionId)).emit('answer:revealed', { questionId: question.id, correctOptionId: correctOption.id });
-    this.io.to(roomFor(sessionId)).emit('reveal', {
-      questionId: question.id,
-      correctOptionId: correctOption.id,
-      distribution: result.distribution,
-      explanation: questionExplanation(question)
-    });
-    this.io.to(roomFor(sessionId)).emit('session:state', this.sessionState(updated));
-    this.io.to(roomFor(sessionId)).emit('leaderboard:updated', {
-      sessionId,
-      entries: await getLeaderboard(this.prisma, sessionId)
-    });
-    for (const item of result.feedback) {
-      for (const connectedSocket of this.io.sockets.sockets.values()) {
-        if (connectedSocket.data.role === 'participant' && connectedSocket.data.participantId === item.participantId) {
-          connectedSocket.emit('reveal:personal', {
+    try {
+      const result = await finalizeQuestion(this.prisma, sessionId, reason);
+      if (!result.finalized) {
+        ackSuccess(ack);
+        return;
+      }
+      this.clearTimer(sessionId);
+      const question = await this.prisma.question.findUnique({
+        where: { id: result.questionId },
+        select: { id: true, explanation: true, options: { where: { isCorrect: true }, select: { id: true } } }
+      });
+      const correctOption = question?.options[0];
+      if (!question || !correctOption) {
+        return ackError(socket, ack, 'INVALID_QUESTION', 'Question answer is unavailable');
+      }
+      const updated = await this.prisma.gameSession.findUnique({
+        where: { id: sessionId },
+        select: { id: true, status: true, currentQuestionIndex: true, currentQuestionDeadline: true }
+      });
+      if (!updated) return ackError(socket, ack, 'NOT_FOUND', 'Session not found');
+      this.io.to(roomFor(sessionId)).emit('question:ended', { questionId: question.id, reason });
+      this.io.to(roomFor(sessionId)).emit('answer:revealed', { questionId: question.id, correctOptionId: correctOption.id });
+      this.io.to(roomFor(sessionId)).emit('reveal', {
+        questionId: question.id,
+        correctOptionId: correctOption.id,
+        distribution: result.distribution,
+        explanation: questionExplanation(question)
+      });
+      this.io.to(roomFor(sessionId)).emit('session:state', this.sessionState(updated));
+      this.io.to(roomFor(sessionId)).emit('leaderboard:updated', {
+        sessionId,
+        entries: await getLeaderboard(this.prisma, sessionId)
+      });
+      // Deliver personal feedback via O(1) Map lookup instead of scanning all sockets.
+      for (const item of result.feedback) {
+        const participantSocketId = this.participantSockets.get(item.participantId);
+        if (participantSocketId) {
+          this.io.to(participantSocketId).emit('reveal:personal', {
             questionId: item.questionId,
             correct: item.correct,
             points: item.points,
@@ -335,9 +379,12 @@ export class RealtimeGameServer {
           });
         }
       }
+      this.scheduleFlow(sessionId, question.id);
+      ackSuccess(ack);
+    } catch {
+      this.clearTimer(sessionId);
+      if (socket || ack) ackError(socket, ack, 'SESSION_ERROR', 'Unable to reveal session');
     }
-    this.scheduleFlow(sessionId, question.id);
-    ackSuccess(ack);
   }
 
   private async leaderboardRequest(socket: QuizSocket, payload: { sessionId: string }, ack?: Ack): Promise<void> {
@@ -355,7 +402,7 @@ export class RealtimeGameServer {
   }
 
   private async extendQuestion(socket: QuizSocket, payload: { sessionId: string; seconds: 10 }, ack?: Ack): Promise<void> {
-    const parsed = z.object({ sessionId: z.string().cuid(), seconds: z.literal(10) }).safeParse(payload);
+    const parsed = z.object({ sessionId: z.string().min(1), seconds: z.literal(10) }).safeParse(payload);
     if (!parsed.success || socket.data.role !== 'host' || socket.data.sessionId !== parsed.data.sessionId) {
       return ackError(socket, ack, 'UNAUTHORIZED', 'Host authorization is required');
     }
@@ -453,15 +500,17 @@ export class RealtimeGameServer {
       const safe = safeError(error);
       return ackError(socket, ack, safe.code, safe.message);
     }
-    for (const connectedSocket of this.io.sockets.sockets.values()) {
-      if (connectedSocket.data.role === 'host' && connectedSocket.data.sessionId === session.id) {
-        connectedSocket.emit('answer:received', { participantId: socket.data.participantId, questionId: question.id });
-      }
+    // Notify host via O(1) Map lookup instead of scanning all sockets.
+    const hostSocketId = this.hostSockets.get(session.id);
+    if (hostSocketId) {
+      this.io.to(hostSocketId).emit('answer:received', { participantId: socket.data.participantId, questionId: question.id });
     }
-    const answered = await this.prisma.answer.count({
-      where: { questionId: question.id, participant: { sessionId: session.id } }
-    });
-    const total = await this.prisma.participant.count({ where: { sessionId: session.id } });
+
+    // Run both count queries concurrently instead of sequentially.
+    const [answered, total] = await Promise.all([
+      this.prisma.answer.count({ where: { questionId: question.id, participant: { sessionId: session.id } } }),
+      this.prisma.participant.count({ where: { sessionId: session.id } })
+    ]);
     this.io.to(roomFor(session.id)).emit('question:progress', { answered, total });
     ackSuccess(ack, { questionId: question.id, acceptedAt: new Date().toISOString() });
   }
@@ -483,36 +532,42 @@ export class RealtimeGameServer {
   }
 
   private async transitionToLeaderboard(sessionId: string, questionId?: string): Promise<void> {
-    const session = await this.prisma.gameSession.findUnique({
-      where: { id: sessionId },
-      select: { id: true, status: true, currentQuestionIndex: true, quizId: true }
-    });
-    if (!session || session.status !== SessionStatus.REVEAL) return;
-    await this.prisma.gameSession.update({ where: { id: sessionId }, data: { status: SessionStatus.LEADERBOARD } });
-    const entries = await getLeaderboard(this.prisma, sessionId);
-    this.io.to(roomFor(sessionId)).emit('session:state', {
-      sessionId,
-      status: SessionStatus.LEADERBOARD,
-      currentQuestionIndex: session.currentQuestionIndex,
-      deadline: null
-    });
-    this.io.to(roomFor(sessionId)).emit('leaderboard', { entries });
-    this.io.to(roomFor(sessionId)).emit('leaderboard:updated', { sessionId, entries });
-    const next = await this.prisma.question.findFirst({
-      where: { quizId: session.quizId, order: session.currentQuestionIndex + 2 },
-      select: { id: true }
-    });
-    const timer = setTimeout(() => {
-      if (next) {
-        const host = [...this.io.sockets.sockets.values()].find(
-          (connectedSocket) => connectedSocket.data.role === 'host' && connectedSocket.data.sessionId === sessionId
-        ) as QuizSocket | undefined;
-        void this.startQuestion(host, { sessionId, questionIndex: session.currentQuestionIndex + 1 });
-      } else {
-        void this.finishSession(sessionId);
-      }
-    }, 8_000);
-    this.flowTimers.set(sessionId, timer);
+    try {
+      const session = await this.prisma.gameSession.findUnique({
+        where: { id: sessionId },
+        select: { id: true, status: true, currentQuestionIndex: true, quizId: true }
+      });
+      if (!session || session.status !== SessionStatus.REVEAL) return;
+      await this.prisma.gameSession.update({ where: { id: sessionId }, data: { status: SessionStatus.LEADERBOARD } });
+      const entries = await getLeaderboard(this.prisma, sessionId);
+      this.io.to(roomFor(sessionId)).emit('session:state', {
+        sessionId,
+        status: SessionStatus.LEADERBOARD,
+        currentQuestionIndex: session.currentQuestionIndex,
+        deadline: null
+      });
+      this.io.to(roomFor(sessionId)).emit('leaderboard', { entries });
+      this.io.to(roomFor(sessionId)).emit('leaderboard:updated', { sessionId, entries });
+      const next = await this.prisma.question.findFirst({
+        where: { quizId: session.quizId, order: session.currentQuestionIndex + 2 },
+        select: { id: true }
+      });
+      const timer = setTimeout(() => {
+        if (next) {
+          // Use O(1) Map lookup instead of iterating all sockets to find the host.
+          const hostSocketId = this.hostSockets.get(sessionId);
+          const host = hostSocketId
+            ? (this.io.sockets.sockets.get(hostSocketId) as QuizSocket | undefined)
+            : undefined;
+          void this.startQuestion(host, { sessionId, questionIndex: session.currentQuestionIndex + 1 });
+        } else {
+          void this.finishSession(sessionId);
+        }
+      }, 8_000);
+      this.flowTimers.set(sessionId, timer);
+    } catch {
+      this.clearTimer(sessionId);
+    }
   }
 
   private async finishSession(sessionId: string, ack?: Ack): Promise<void> {

@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { SessionStatus, PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import { requireAdmin, requireSessionAccess } from '../middleware/auth.js';
-import { joinSession, createSession, getSession, listSessions, updateSessionStatus } from '../services/session-service.js';
+import { joinSession, createSession, getSession, listSessions, updateSessionStatus, deleteSession } from '../services/session-service.js';
 import { getLeaderboard } from '../services/scoring-service.js';
 import { validate } from '../validation/request.js';
 import {
@@ -47,6 +47,11 @@ export const createSessionRouter = (prisma: PrismaClient) => {
   router.get('/:id', validate(sessionIdParamSchema, 'params'), async (request, response) => {
     const { id } = sessionIdParamSchema.parse(request.params);
     response.json({ success: true, data: await getSession(prisma, id) });
+  });
+  router.delete('/:id', validate(sessionIdParamSchema, 'params'), async (request, response) => {
+    const { id } = sessionIdParamSchema.parse(request.params);
+    await deleteSession(prisma, id);
+    response.status(200).json({ success: true, data: { id, deleted: true } });
   });
   router.patch('/:id/status', validate(sessionIdParamSchema, 'params'), validate(updateSessionStatusSchema, 'body'), async (request, response) => {
     const { id } = sessionIdParamSchema.parse(request.params);

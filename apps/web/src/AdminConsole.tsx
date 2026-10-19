@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
-  createQuestion, createQuiz, createSession, deleteQuestion, getQuiz, getSessionResults, listQuizzes,
+  createQuestion, createQuiz, createSession, deleteQuestion, deleteSession, getQuiz, getSessionResults, listQuizzes,
   listSessions, loginAdmin, updateQuiz, uploadMedia, verifyCertificate
 } from './api';
 import { createQuizSocket, type QuizSocket } from './socket';
@@ -57,15 +57,17 @@ export function AdminConsole({ onBack }: { onBack: () => void }) {
   if (!token) {
     return (
       <main className="app-shell landing-shell">
+        <div style={{ padding: '20px 32px', borderBottom: '1px solid var(--border)' }}>
+          <button className="back-button" onClick={onBack}>← Back to quiz join</button>
+        </div>
         <section className="host-panel">
-          <button className="back-button" onClick={onBack}>← Participant entry</button>
-          <p className="eyebrow">ADMIN OPERATIONS</p>
-          <h2>Control room</h2>
+          <p className="eyebrow">Admin Access</p>
+          <h2>Control Room</h2>
           <form className="join-card" onSubmit={login}>
             <label>Admin username<input value={username} onChange={(event) => setUsername(event.target.value)} required /></label>
             <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
             {error && <p className="error-text">{error}</p>}
-            <button>Open control room</button>
+            <button>Sign in to Control Room</button>
           </form>
         </section>
       </main>
@@ -99,7 +101,10 @@ export function AdminConsole({ onBack }: { onBack: () => void }) {
   return (
     <main className="app-shell admin-shell">
       <header className="topbar admin-topbar">
-        <button className="brand-mark brand-button" onClick={() => setTab('overview')}>G/IR CONTROL</button>
+        <button className="brand-mark brand-button" onClick={() => setTab('overview')} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <img src="/club-logo.png" alt="" width={28} height={28} style={{ borderRadius: 4 }} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+          <span>CTPDF · Quiz Admin</span>
+        </button>
         <nav className="admin-nav">{(['overview', 'quizzes', 'sessions', 'host', 'results', 'verify'] as AdminTab[]).map((item) => <button className={tab === item ? 'active' : ''} onClick={() => setTab(item)} key={item}>{item}</button>)}</nav>
         <button className="text-button" onClick={onBack}>Exit</button>
       </header>
@@ -108,7 +113,7 @@ export function AdminConsole({ onBack }: { onBack: () => void }) {
         {notice && <p className="notice-text">{notice}</p>}
         {tab === 'overview' && <Overview quizzes={quizzes} sessions={sessions} onQuizzes={() => setTab('quizzes')} onSessions={() => setTab('sessions')} />}
         {tab === 'quizzes' && <QuizWorkspace token={token} quizzes={quizzes} selectedQuiz={selectedQuiz} onSelect={openQuiz} onCreated={async () => { await refresh(); setNotice('Quiz created'); }} onUpdated={async () => { await refresh(); if (selectedQuiz) await openQuiz(selectedQuiz.id); }} onError={setError} />}
-        {tab === 'sessions' && <SessionWorkspace token={token} sessions={sessions} quizzes={quizzes} onCreated={async () => { await refresh(); setNotice('Session created'); }} onResults={loadResults} onHost={openHost} onError={setError} />}
+        {tab === 'sessions' && <SessionWorkspace token={token} sessions={sessions} quizzes={quizzes} onChanged={async (msg) => { await refresh(); setNotice(msg ?? 'Sessions updated'); }} onResults={loadResults} onHost={openHost} onError={setError} />}
         {tab === 'host' && <HostControl token={token} session={selectedSession} onError={setError} />}
         {tab === 'results' && <ResultsWorkspace token={token} session={selectedSession} results={results} />}
         {tab === 'verify' && <CertificateVerifier onError={setError} />}
@@ -120,7 +125,7 @@ export function AdminConsole({ onBack }: { onBack: () => void }) {
 function Overview({ quizzes, sessions, onQuizzes, onSessions }: { quizzes: QuizSummary[]; sessions: AdminSession[]; onQuizzes: () => void; onSessions: () => void }) {
   const published = quizzes.filter((quiz) => quiz.status === 'PUBLISHED').length;
   const live = sessions.filter((session) => !['ENDED', 'PODIUM'].includes(session.status)).length;
-  return <div className="admin-page"><p className="eyebrow">MISSION CONTROL</p><h1 className="admin-title">Run the investigation.</h1><div className="metric-grid"><button onClick={onQuizzes}><span>QUIZZES</span><strong>{quizzes.length}</strong><small>{published} published</small></button><button onClick={onSessions}><span>SESSIONS</span><strong>{sessions.length}</strong><small>{live} active</small></button><div><span>PLATFORM</span><strong>READY</strong><small>Single-process live engine</small></div></div><div className="admin-callout"><span>FRONTEND HANDOFF</span><p>Build, publish, launch, and monitor a quiz from this control room. Participant gameplay opens through the public join screen.</p></div></div>;
+  return <div className="admin-page"><p className="eyebrow">Overview</p><h1 className="admin-title">Quiz Platform Dashboard</h1><div className="metric-grid"><button onClick={onQuizzes}><span>QUIZZES</span><strong>{quizzes.length}</strong><small>{published} published</small></button><button onClick={onSessions}><span>SESSIONS</span><strong>{sessions.length}</strong><small>{live} active</small></button><div><span>PLATFORM</span><strong>READY</strong><small>Live quiz engine online</small></div></div><div className="admin-callout"><span>GETTING STARTED</span><p>Build and publish a quiz, create a session, then host it live. Participants join from the public quiz screen using the session PIN or QR code.</p></div></div>;
 }
 
 function QuizWorkspace({ token, quizzes, selectedQuiz, onSelect, onCreated, onUpdated, onError }: { token: string; quizzes: QuizSummary[]; selectedQuiz: QuizDetail | null; onSelect: (id: string) => void; onCreated: () => void; onUpdated: () => void; onError: (message: string) => void }) {
@@ -163,11 +168,95 @@ function QuestionCard({ question, token, onDeleted, onError }: { question: QuizQ
   return <article className="question-card"><div><span className="question-number">Q{String(question.order).padStart(2, '0')}</span><h3>{question.text}</h3><p>{question.timerSeconds}s · {question.basePoints.toLocaleString()} points · {question.options.length} options</p></div><button className="ghost-danger" onClick={remove} disabled={busy}>Delete</button></article>;
 }
 
-function SessionWorkspace({ token, sessions, quizzes, onCreated, onResults, onHost, onError }: { token: string; sessions: AdminSession[]; quizzes: QuizSummary[]; onCreated: () => void; onResults: (session: AdminSession) => void; onHost: (session: AdminSession) => void; onError: (message: string) => void }) {
+function SessionWorkspace({ token, sessions, quizzes, onChanged, onResults, onHost, onError }: { token: string; sessions: AdminSession[]; quizzes: QuizSummary[]; onChanged: (msg?: string) => void; onResults: (session: AdminSession) => void; onHost: (session: AdminSession) => void; onError: (message: string) => void }) {
   const published = quizzes.filter((quiz) => quiz.status === 'PUBLISHED');
   const [quizId, setQuizId] = useState(published[0]?.id ?? '');
-  const create = async () => { try { await createSession(token, quizId); onCreated(); } catch (cause) { onError(cause instanceof Error ? cause.message : 'Unable to create session'); } };
-  return <div className="admin-page"><p className="eyebrow">LIVE OPERATIONS</p><h1 className="admin-title">Launch a session.</h1><div className="launch-bar"><select value={quizId} onChange={(event) => setQuizId(event.target.value)}><option value="">Select published quiz</option>{published.map((quiz) => <option key={quiz.id} value={quiz.id}>{quiz.title}</option>)}</select><button onClick={create} disabled={!quizId}>Create lobby</button></div><div className="session-table">{sessions.map((session) => <div className="session-card" key={session.id}><div><span className="eyebrow">{session.status}</span><h3>{session.quiz.title}</h3><p>{session._count.participants} participants · {new Date(session.createdAt).toLocaleString()}</p></div><JoinQr pin={session.pin} compact /><div className="session-pin">{session.pin}</div><div className="session-actions"><button onClick={() => onHost(session)}>Host</button><button onClick={() => onResults(session)}>Results</button></div></div>)}</div></div>;
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const create = async () => {
+    try {
+      await createSession(token, quizId);
+      onChanged('Session created');
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : 'Unable to create session');
+    }
+  };
+
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  const removeSession = async (sessionId: string) => {
+    setDeletingId(sessionId);
+    try {
+      await deleteSession(token, sessionId);
+      setConfirmDeleteId(null);
+      onChanged('Session deleted successfully');
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : 'Unable to delete session');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  return (
+    <div className="admin-page">
+      <p className="eyebrow">LIVE OPERATIONS</p>
+      <h1 className="admin-title">Launch a session.</h1>
+      <div className="launch-bar">
+        <select value={quizId} onChange={(event) => setQuizId(event.target.value)}>
+          <option value="">Select published quiz</option>
+          {published.map((quiz) => (
+            <option key={quiz.id} value={quiz.id}>{quiz.title}</option>
+          ))}
+        </select>
+        <button onClick={create} disabled={!quizId}>Create lobby</button>
+      </div>
+      <div className="session-table">
+        {sessions.map((session) => (
+          <div className="session-card" key={session.id}>
+            <div>
+              <span className="eyebrow">{session.status}</span>
+              <h3>{session.quiz.title}</h3>
+              <p>{session._count.participants} participants · {new Date(session.createdAt).toLocaleString()}</p>
+            </div>
+            <JoinQr pin={session.pin} compact />
+            <div className="session-pin">{session.pin}</div>
+            <div className="session-actions">
+              <button onClick={() => onHost(session)}>Host</button>
+              <button onClick={() => onResults(session)}>Results</button>
+              {confirmDeleteId === session.id ? (
+                <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                  <button
+                    className="danger-button"
+                    style={{ padding: '8px 12px', fontSize: 11 }}
+                    onClick={() => removeSession(session.id)}
+                    disabled={deletingId === session.id}
+                  >
+                    {deletingId === session.id ? 'Deleting…' : 'Confirm?'}
+                  </button>
+                  <button
+                    className="btn-outline"
+                    style={{ padding: '8px 10px', fontSize: 11 }}
+                    onClick={() => setConfirmDeleteId(null)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className="ghost-danger"
+                  style={{ padding: '8px 12px' }}
+                  onClick={() => setConfirmDeleteId(session.id)}
+                  title="Delete session"
+                >
+                  Delete
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function JoinQr({ pin, compact = false }: { pin: string; compact?: boolean }) {

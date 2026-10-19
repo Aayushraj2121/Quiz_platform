@@ -157,87 +157,113 @@ export const finalizeQuestion = async (
     }
     const correctOptionId = correctOption.id;
 
+    // ── Fetch question timing ONCE (was fetched once per answer inside the loop) ──
+    const questionWithTiming = await transaction.question.findUniqueOrThrow({
+      where: { id: question.id },
+      select: { basePoints: true, timerSeconds: true }
+    });
+
+    // ── Bulk-fetch all unscored answers with their participant data in one query ──
+    // Filtering on awardedPoints:0 preserves the original idempotency guarantee.
     const answers = await transaction.answer.findMany({
       where: {
         questionId: question.id,
-        participant: { sessionId }
+        participant: { sessionId },
+        awardedPoints: 0
       },
       select: {
         id: true,
         participantId: true,
-        selectedOptionId: true
+        selectedOptionId: true,
+        responseTimeMs: true,
+        participant: {
+          select: { totalScore: true, correctCount: true, streak: true }
+        }
       }
     });
 
+    // ── Calculate all scores in memory (zero DB round-trips) ──
     let awardedPoints = 0;
     const distribution = new Map<string, number>();
     const feedback: FinalizeQuestionResult['feedback'] = [];
+
+    interface ScoredAnswer {
+      answerId: string;
+      participantId: string;
+      isCorrect: boolean;
+      points: number;
+      newStreak: number;
+      newTotalScore: number;
+      newCorrectCount: number;
+    }
+    const scoredAnswers: ScoredAnswer[] = [];
+
     for (const answer of answers) {
       const isCorrect = answer.selectedOptionId === correctOptionId;
       distribution.set(answer.selectedOptionId, (distribution.get(answer.selectedOptionId) ?? 0) + 1);
-      const updated = await transaction.answer.updateMany({
-        where: { id: answer.id, awardedPoints: 0 },
-        data: { isCorrect }
-      });
 
-      if (updated.count !== 1) continue;
-      const participant = await transaction.participant.findUniqueOrThrow({
-        where: { id: answer.participantId },
-        select: { totalScore: true, correctCount: true, streak: true }
-      });
-      const questionWithTiming = await transaction.question.findUniqueOrThrow({
-        where: { id: question.id },
-        select: { basePoints: true, timerSeconds: true }
-      });
-      const storedAnswer = await transaction.answer.findUniqueOrThrow({
-        where: { id: answer.id },
-        select: { responseTimeMs: true }
-      });
-      const remainingRatio = Math.max(0, Math.min(1, (storedAnswer.responseTimeMs ?? 0) / (questionWithTiming.timerSeconds * 1000)));
+      const remainingRatio = Math.max(
+        0,
+        Math.min(1, (answer.responseTimeMs ?? 0) / (questionWithTiming.timerSeconds * 1000))
+      );
       const basePoints = isCorrect
         ? Math.round(questionWithTiming.basePoints * (0.5 + 0.5 * remainingRatio))
         : 0;
-      const streak = isCorrect ? participant.streak + 1 : 0;
-      const streakBonus = isCorrect ? Math.min(500, Math.max(0, streak - 2) * 100) : 0;
+      const newStreak = isCorrect ? answer.participant.streak + 1 : 0;
+      const streakBonus = isCorrect ? Math.min(500, Math.max(0, newStreak - 2) * 100) : 0;
       const points = basePoints + streakBonus;
-      const updatedParticipant = await transaction.participant.update({
-        where: { id: answer.participantId },
-        data: {
-          totalScore: { increment: points },
-          ...(isCorrect ? { correctCount: { increment: 1 } } : {}),
-          streak
-        },
-        select: { totalScore: true, streak: true }
-      });
-      await transaction.answer.update({
-        where: { id: answer.id },
-        data: { awardedPoints: points }
-      });
+      const newTotalScore = answer.participant.totalScore + points;
+      const newCorrectCount = answer.participant.correctCount + (isCorrect ? 1 : 0);
+
       awardedPoints += points;
+      scoredAnswers.push({
+        answerId: answer.id,
+        participantId: answer.participantId,
+        isCorrect,
+        points,
+        newStreak,
+        newTotalScore,
+        newCorrectCount
+      });
       feedback.push({
         participantId: answer.participantId,
         questionId: question.id,
         correct: isCorrect,
         points,
-        streak: updatedParticipant.streak,
-        totalScore: updatedParticipant.totalScore
+        streak: newStreak,
+        totalScore: newTotalScore
       });
     }
-    for (const answer of await transaction.answer.findMany({
-      where: { questionId: question.id, participant: { sessionId } },
-      select: { selectedOptionId: true }
-    })) {
-      if (!distribution.has(answer.selectedOptionId)) {
-        distribution.set(answer.selectedOptionId, 0);
-      }
-    }
-    await transaction.participant.updateMany({
-      where: {
-        sessionId,
-        answers: { none: { questionId: question.id } }
-      },
-      data: { streak: 0 }
-    });
+
+    // ── Apply all DB writes concurrently instead of sequentially ──
+    await Promise.all([
+      // Update every scored answer in parallel.
+      ...scoredAnswers.map((sa) =>
+        transaction.answer.update({
+          where: { id: sa.answerId },
+          data: { isCorrect: sa.isCorrect, awardedPoints: sa.points }
+        })
+      ),
+      // Update every participant in parallel.
+      ...scoredAnswers.map((sa) =>
+        transaction.participant.update({
+          where: { id: sa.participantId },
+          data: {
+            totalScore: sa.newTotalScore,
+            correctCount: sa.newCorrectCount,
+            streak: sa.newStreak
+          }
+        })
+      ),
+      // Reset streak for participants who did not answer this question.
+      transaction.participant.updateMany({
+        where: {
+          sessionId,
+          answers: { none: { questionId: question.id } }
+        },
+        data: { streak: 0 }
+      })
+    ]);
 
     return {
       sessionId,
