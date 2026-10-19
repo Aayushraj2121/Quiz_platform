@@ -2,6 +2,8 @@ apps/game-server/node_modules/
 apps/game-server/dist/
 apps/game-server/.env
 apps/game-server/uploads/
+*.db
+*.db-journal
 apps/game-server/prisma/*.db
 apps/game-server/prisma/*.db-journal
 apps/game-server/prisma/prisma/*.db
