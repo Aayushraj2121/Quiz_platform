@@ -1,4 +1,6 @@
 import type { ErrorRequestHandler, RequestHandler } from 'express';
+import { Prisma } from '@prisma/client';
+import { ZodError } from 'zod';
 
 export class AppError extends Error {
   public readonly statusCode: number;
@@ -23,6 +25,18 @@ export const notFoundHandler: RequestHandler = (request, response) => {
 };
 
 export const errorHandler: ErrorRequestHandler = (error, _request, response, _next) => {
+  if (error instanceof ZodError) {
+    response.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Request validation failed',
+        details: error.flatten()
+      }
+    });
+    return;
+  }
+
   if (error instanceof AppError) {
     response.status(error.statusCode).json({
       success: false,
@@ -32,6 +46,24 @@ export const errorHandler: ErrorRequestHandler = (error, _request, response, _ne
       }
     });
     return;
+  }
+
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (error.code === 'P2025') {
+      response.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'The requested resource was not found' }
+      });
+      return;
+    }
+
+    if (error.code === 'P2002') {
+      response.status(409).json({
+        success: false,
+        error: { code: 'CONFLICT', message: 'A resource with these values already exists' }
+      });
+      return;
+    }
   }
 
   console.error(
