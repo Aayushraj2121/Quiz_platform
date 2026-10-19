@@ -1,0 +1,159 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Admin {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Quiz {
+  id          String        @id @default(cuid())
+  title       String
+  description String?
+  status      QuizStatus    @default(DRAFT)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  questions   Question[]
+  sessions    GameSession[]
+}
+
+model Question {
+  id          String          @id @default(cuid())
+  quizId      String
+  order       Int
+  text        String
+  explanation String?
+  timerSeconds Int            @default(30)
+  basePoints  Int             @default(1000)
+  mediaAssetId String?         @unique
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  quiz        Quiz            @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  mediaAsset  MediaAsset?     @relation(fields: [mediaAssetId], references: [id], onDelete: SetNull)
+  options     QuestionOption[]
+  answers     Answer[]
+
+  @@unique([quizId, order])
+  @@index([quizId])
+}
+
+model QuestionOption {
+  id         String     @id @default(cuid())
+  questionId String
+  text       String
+  isCorrect  Boolean    @default(false)
+  question   Question   @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answers    Answer[]
+
+  @@index([questionId])
+}
+
+model GameSession {
+  id                     String        @id @default(cuid())
+  quizId                 String
+  pin                    String        @unique
+  status                 SessionStatus @default(LOBBY)
+  currentQuestionIndex   Int           @default(-1)
+  startTime              DateTime?
+  endTime                DateTime?
+  currentQuestionDeadline DateTime?
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+  quiz                   Quiz          @relation(fields: [quizId], references: [id], onDelete: Restrict)
+  participants           Participant[]
+  certificates           Certificate[]
+
+  @@index([quizId])
+  @@index([status])
+}
+
+model Participant {
+  id                    String        @id @default(cuid())
+  sessionId             String
+  displayName           String
+  participantIdentifier String        @unique @default(cuid())
+  email                 String?
+  studentId             String?
+  tokenHash             String?
+  joinedAt              DateTime      @default(now())
+  lastSeenAt            DateTime?
+  totalScore            Int           @default(0)
+  correctCount          Int           @default(0)
+  streak                Int           @default(0)
+  session               GameSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  answers               Answer[]
+  certificates          Certificate[]
+
+  @@unique([sessionId, displayName])
+  @@index([sessionId, totalScore])
+}
+
+model Answer {
+  id               String         @id @default(cuid())
+  participantId    String
+  questionId       String
+  selectedOptionId String
+  isCorrect        Boolean
+  awardedPoints    Int            @default(0)
+  responseTimeMs   Int?
+  submittedAt      DateTime       @default(now())
+  participant      Participant    @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  question         Question       @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  selectedOption   QuestionOption @relation(fields: [selectedOptionId], references: [id], onDelete: Restrict)
+
+  @@unique([participantId, questionId])
+  @@index([questionId])
+}
+
+model Certificate {
+  id               String      @id @default(cuid())
+  participantId    String
+  sessionId        String
+  verificationCode String      @unique
+  issuedAt         DateTime    @default(now())
+  participant      Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  session          GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([participantId, sessionId])
+  @@index([sessionId])
+}
+
+model MediaAsset {
+  id           String   @id @default(cuid())
+  filePath     String
+  mediaType    MediaType
+  originalName String
+  mimeType     String
+  sizeBytes    Int
+  createdAt    DateTime @default(now())
+  question     Question?
+}
+
+enum QuizStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum SessionStatus {
+  LOBBY
+  QUESTION
+  REVEAL
+  LEADERBOARD
+  PODIUM
+  ENDED
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+}
