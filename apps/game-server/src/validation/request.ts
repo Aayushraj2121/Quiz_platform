@@ -12,8 +12,8 @@ export const validate = <T extends ZodType>(
   next();
 };
 
-export const idParamSchema = z.object({ id: z.string().cuid() });
-export const quizIdParamSchema = z.object({ id: z.string().cuid() });
+export const idParamSchema = z.object({ id: z.string().trim().min(1).max(100) });
+export const quizIdParamSchema = z.object({ id: z.string().trim().min(1).max(100) });
 
 export const loginSchema = z.object({
   username: z.string().trim().min(1).max(100),

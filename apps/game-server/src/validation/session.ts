@@ -1,9 +1,9 @@
 import { z } from 'zod';
 
-export const sessionIdParamSchema = z.object({ id: z.string().cuid() });
+export const sessionIdParamSchema = z.object({ id: z.string().trim().min(1).max(100) });
 
 export const createSessionSchema = z.object({
-  quizId: z.string().cuid()
+  quizId: z.string().trim().min(1).max(100)
 });
 
 export const updateSessionStatusSchema = z.object({

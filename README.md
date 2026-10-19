@@ -298,3 +298,24 @@ The server remains intentionally single-process: Socket.IO timers are
 in-memory and are not coordinated across replicas. After restart, an active
 question must be recovered by an authorized host; no multi-instance support is
 claimed.
+
+## Frontend
+
+The initial PRD-driven React/Vite frontend lives in `apps/web`. It includes the
+participant entry flow, lobby, live question answering, personal reveal,
+leaderboard, podium, final results shell, and Socket.IO contract wiring.
+
+```bash
+cp apps/web/.env.example apps/web/.env
+npm --prefix apps/web install
+npm --prefix apps/web run dev
+```
+
+Set `VITE_API_URL` to the backend `/api` URL and `VITE_SOCKET_URL` to the
+backend origin. The frontend contract is documented in
+[`docs/FRONTEND_HANDOFF.md`](docs/FRONTEND_HANDOFF.md).
+
+The control room now also supports admin login, quiz creation and publishing,
+question/option authoring, question media upload, session launch, live host
+controls, result inspection and authenticated CSV downloads, plus certificate
+verification.
