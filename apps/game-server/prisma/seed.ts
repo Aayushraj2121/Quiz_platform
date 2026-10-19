@@ -14,6 +14,11 @@ const seed = async (): Promise<void> => {
       update: { passwordHash },
       create: { username, passwordHash }
     });
+    if (username !== 'admin') {
+      await prisma.admin.deleteMany({
+        where: { username: 'admin' }
+      });
+    }
   }
 
   const quiz = await prisma.quiz.upsert({
