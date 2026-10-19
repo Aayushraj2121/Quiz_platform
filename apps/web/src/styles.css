@@ -496,10 +496,17 @@ button:disabled { cursor: not-allowed; opacity: .4; }
 
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .option-editor { display: grid; gap: 8px; margin: 4px 0 16px; }
-.option-line { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
-.option-line input[type="text"] { margin: 0; }
+.option-editor-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; font-size: .8rem; font-weight: 600; letter-spacing: .06em; color: var(--muted); text-transform: uppercase; }
+.option-line { display: grid; grid-template-columns: 24px 1fr auto auto; gap: 8px; align-items: center; }
+.option-line input[type="text"], .option-line input:not([type="radio"]) { margin: 0; }
+.option-index { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; background: var(--glass); border-radius: 50%; font-size: .75rem; font-weight: 700; color: var(--teal); flex-shrink: 0; }
 .check-label { display: flex; align-items: center; gap: 5px; white-space: nowrap; margin: 0; color: var(--teal); font-size: .875rem; }
 .check-label input { width: auto; }
+.btn-add-option { background: transparent; border: 1px dashed var(--teal-dim); color: var(--teal); padding: 4px 12px; border-radius: 6px; font-size: .78rem; font-weight: 600; letter-spacing: .04em; cursor: pointer; transition: background .2s, border-color .2s; }
+.btn-add-option:hover { background: rgba(61,214,208,.1); border-color: var(--teal); }
+.btn-remove-option { width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; background: transparent; border: 1px solid rgba(255,80,80,.3); color: rgba(255,80,80,.7); border-radius: 6px; font-size: 1rem; line-height: 1; cursor: pointer; transition: background .2s, color .2s, border-color .2s; flex-shrink: 0; padding: 0; }
+.btn-remove-option:hover { background: rgba(255,80,80,.12); color: #ff5050; border-color: #ff5050; }
+
 
 /* =====================================================
    SESSION MANAGEMENT
@@ -817,7 +824,7 @@ h2 { font-size: clamp(1.8rem, 5vw, 3.8rem); line-height: 1.05; letter-spacing: -
   .admin-nav { order: 3; width: 100%; }
   .admin-topbar { flex-wrap: wrap; }
   .editor-heading { display: grid; }
-  .option-line { grid-template-columns: 1fr; }
+  .option-line { grid-template-columns: 24px 1fr auto auto; }
   .session-actions { flex-wrap: wrap; }
   .club-name-main { font-size: 11px; }
 }
