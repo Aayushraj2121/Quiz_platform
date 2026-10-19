@@ -18,7 +18,6 @@ const blankQuestion = () => ({
   basePoints: 1000,
   options: [
     { text: '', isCorrect: true },
-    { text: '', isCorrect: false },
     { text: '', isCorrect: false }
   ]
 });
@@ -159,7 +158,114 @@ function QuizWorkspace({ token, quizzes, selectedQuiz, onSelect, onCreated, onUp
     if (!selectedQuiz) return;
     try { await updateQuiz(token, selectedQuiz.id, { status }); onUpdated(); } catch (cause) { onError(cause instanceof Error ? cause.message : 'Unable to update quiz'); }
   };
-  return <div className="admin-page"><p className="eyebrow">CONTENT STUDIO</p><h1 className="admin-title">Quizzes & question bank</h1><div className="split-workspace"><aside className="list-panel"><button className="create-tile" onClick={() => onSelect('')}>+ New quiz</button>{quizzes.map((quiz) => <button className={`list-item ${selectedQuiz?.id === quiz.id ? 'selected' : ''}`} onClick={() => onSelect(quiz.id)} key={quiz.id}><span>{quiz.title}</span><small>{quiz.status} · {quiz._count.questions} questions</small></button>)}</aside><section className="editor-panel">{!selectedQuiz ? <form className="editor-card" onSubmit={create}><p className="eyebrow">NEW QUIZ</p><label>Title<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Digital Safety Under Pressure" required /></label><label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} placeholder="What should participants investigate?" /></label><button>Create quiz</button></form> : <><div className="editor-heading"><div><p className="eyebrow">{selectedQuiz.status}</p><h2>{selectedQuiz.title}</h2></div><div className="button-row"><button onClick={() => publish(selectedQuiz.status === 'PUBLISHED' ? 'DRAFT' : 'PUBLISHED')}>{selectedQuiz.status === 'PUBLISHED' ? 'Unpublish' : 'Publish quiz'}</button></div></div><div className="question-list">{selectedQuiz.questions.map((item) => <QuestionCard key={item.id} question={item} token={token} onDeleted={onUpdated} onError={onError} />)}</div><form className="editor-card question-form" onSubmit={addQuestion}><p className="eyebrow">ADD QUESTION {question.order}</p><label>Question<textarea value={question.text} onChange={(event) => setQuestion({ ...question, text: event.target.value })} rows={3} required /></label><div className="field-row"><label>Timer seconds<input type="number" min={10} max={120} value={question.timerSeconds} onChange={(event) => setQuestion({ ...question, timerSeconds: Number(event.target.value) })} /></label><label>Base points<input type="number" min={1} value={question.basePoints} onChange={(event) => setQuestion({ ...question, basePoints: Number(event.target.value) })} /></label></div><label>Explanation<textarea value={question.explanation} onChange={(event) => setQuestion({ ...question, explanation: event.target.value })} rows={2} /></label><div className="option-editor">{question.options.map((option, index) => <div className="option-line" key={index}><input value={option.text} onChange={(event) => setQuestion({ ...question, options: question.options.map((item, itemIndex) => itemIndex === index ? { ...item, text: event.target.value } : item) })} placeholder={`Option ${index + 1}`} /><label className="check-label"><input type="radio" checked={option.isCorrect} onChange={() => setQuestion({ ...question, options: question.options.map((item, itemIndex) => ({ ...item, isCorrect: itemIndex === index })) })} /> Correct</label></div>)}</div><label>Media image/video<input type="file" accept="image/png,image/jpeg,image/gif,image/webp,video/mp4,video/webm" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></label><button disabled={saving}>{saving ? 'Saving…' : 'Add question'}</button></form></>}</section></div></div>;
+  const addOption = () => {
+    if (question.options.length >= 4) return;
+    setQuestion({ ...question, options: [...question.options, { text: '', isCorrect: false }] });
+  };
+  const removeOption = (index: number) => {
+    if (question.options.length <= 2) return;
+    const next = question.options.filter((_, i) => i !== index);
+    // if we just removed the correct option, mark first as correct
+    const hasCorrect = next.some((o) => o.isCorrect);
+    setQuestion({ ...question, options: hasCorrect ? next : next.map((o, i) => ({ ...o, isCorrect: i === 0 })) });
+  };
+  const updateOption = (index: number, text: string) =>
+    setQuestion({ ...question, options: question.options.map((item, i) => i === index ? { ...item, text } : item) });
+  const setCorrect = (index: number) =>
+    setQuestion({ ...question, options: question.options.map((item, i) => ({ ...item, isCorrect: i === index })) });
+
+  return (
+    <div className="admin-page">
+      <p className="eyebrow">CONTENT STUDIO</p>
+      <h1 className="admin-title">Quizzes & question bank</h1>
+      <div className="split-workspace">
+        <aside className="list-panel">
+          <button className="create-tile" onClick={() => onSelect('')}>+ New quiz</button>
+          {quizzes.map((quiz) => (
+            <button className={`list-item ${selectedQuiz?.id === quiz.id ? 'selected' : ''}`} onClick={() => onSelect(quiz.id)} key={quiz.id}>
+              <span>{quiz.title}</span>
+              <small>{quiz.status} · {quiz._count.questions} questions</small>
+            </button>
+          ))}
+        </aside>
+        <section className="editor-panel">
+          {!selectedQuiz ? (
+            <form className="editor-card" onSubmit={create}>
+              <p className="eyebrow">NEW QUIZ</p>
+              <label>Title<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Digital Safety Under Pressure" required /></label>
+              <label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} placeholder="What should participants investigate?" /></label>
+              <button>Create quiz</button>
+            </form>
+          ) : (
+            <>
+              <div className="editor-heading">
+                <div><p className="eyebrow">{selectedQuiz.status}</p><h2>{selectedQuiz.title}</h2></div>
+                <div className="button-row">
+                  <button onClick={() => publish(selectedQuiz.status === 'PUBLISHED' ? 'DRAFT' : 'PUBLISHED')}>
+                    {selectedQuiz.status === 'PUBLISHED' ? 'Unpublish' : 'Publish quiz'}
+                  </button>
+                </div>
+              </div>
+              <div className="question-list">
+                {selectedQuiz.questions.map((item) => <QuestionCard key={item.id} question={item} token={token} onDeleted={onUpdated} onError={onError} />)}
+              </div>
+              <form className="editor-card question-form" onSubmit={addQuestion}>
+                <p className="eyebrow">ADD QUESTION {question.order}</p>
+                <label>Question
+                  <textarea value={question.text} onChange={(event) => setQuestion({ ...question, text: event.target.value })} rows={3} required />
+                </label>
+                <div className="field-row">
+                  <label>Timer seconds
+                    <input type="number" min={10} max={120} value={question.timerSeconds} onChange={(event) => setQuestion({ ...question, timerSeconds: Number(event.target.value) })} />
+                  </label>
+                  <label>Base points
+                    <input type="number" min={1} value={question.basePoints} onChange={(event) => setQuestion({ ...question, basePoints: Number(event.target.value) })} />
+                  </label>
+                </div>
+                <label>Explanation
+                  <textarea value={question.explanation} onChange={(event) => setQuestion({ ...question, explanation: event.target.value })} rows={2} />
+                </label>
+                <div className="option-editor">
+                  <div className="option-editor-header">
+                    <span>Answer options <small style={{ opacity: 0.55 }}>({question.options.length}/4 · min 2)</small></span>
+                    {question.options.length < 4 && (
+                      <button type="button" className="btn-add-option" onClick={addOption}>+ Add option</button>
+                    )}
+                  </div>
+                  {question.options.map((option, index) => (
+                    <div className="option-line" key={index}>
+                      <span className="option-index">{index + 1}</span>
+                      <input
+                        value={option.text}
+                        onChange={(event) => updateOption(index, event.target.value)}
+                        placeholder={`Option ${index + 1}`}
+                      />
+                      <label className="check-label" title="Mark as correct answer">
+                        <input type="radio" checked={option.isCorrect} onChange={() => setCorrect(index)} />
+                        Correct
+                      </label>
+                      {question.options.length > 2 && (
+                        <button
+                          type="button"
+                          className="btn-remove-option"
+                          onClick={() => removeOption(index)}
+                          title="Remove this option"
+                        >×</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <label>Media image/video
+                  <input type="file" accept="image/png,image/jpeg,image/gif,image/webp,video/mp4,video/webm" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+                </label>
+                <button disabled={saving}>{saving ? 'Saving…' : 'Add question'}</button>
+              </form>
+            </>
+          )}
+        </section>
+      </div>
+    </div>
+  );
 }
 
 function QuestionCard({ question, token, onDeleted, onError }: { question: QuizQuestion; token: string; onDeleted: () => void; onError: (message: string) => void }) {
