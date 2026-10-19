@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import bcrypt from 'bcryptjs';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PrismaClient, QuizStatus } from '@prisma/client';
+import { PrismaClient, QuizStatus, SessionStatus } from '@prisma/client';
 import { createApp } from '../src/app.js';
 
 const temporaryDirectory = mkdtempSync(resolve(tmpdir(), 'quiz-platform-session-api-'));
@@ -18,6 +18,7 @@ let sessionId = '';
 let pin = '';
 let joinSessionId = '';
 let joinPin = '';
+let participantToken = '';
 
 beforeAll(async () => {
   execFileSync(resolve('node_modules/.bin/prisma'), ['migrate', 'deploy'], {
@@ -138,12 +139,14 @@ describe('participant joining', () => {
     expect(valid.status).toBe(201);
     expect(valid.body.data.participant.displayName).toBe('Alice');
     expect(valid.body.data.participant.participantIdentifier).toEqual(expect.any(String));
+    participantToken = valid.body.data.connectionToken;
     expect(valid.body.data.participant).not.toHaveProperty('tokenHash');
     expect(valid.body.data.session).toEqual({
       id: joinSessionId,
       pin: joinPin,
       status: 'LOBBY',
-      quiz: { id: quizId, title: 'Session quiz' }
+      quiz: { id: quizId, title: 'Session quiz' },
+      joinUrl: expect.stringContaining(`/join/${joinPin}`)
     });
     const leaderboard = await request(app)
       .get(`/api/sessions/${joinSessionId}/leaderboard`)
@@ -156,11 +159,34 @@ describe('participant joining', () => {
       correctCount: 0
     });
 
+    const participantResults = await request(app)
+      .get(`/api/results/sessions/${joinSessionId}`)
+      .set('Authorization', `Bearer ${valid.body.data.connectionToken}`);
+    expect(participantResults.status).toBe(200);
+    expect(participantResults.body.data.participants).toHaveLength(1);
+    expect(participantResults.body.data.leaderboard).toHaveLength(1);
+    expect(participantResults.body.data.podium).toHaveLength(0);
+    expect(participantResults.body.data.participants[0]).not.toHaveProperty('email');
+
+    const adminResults = await request(app)
+      .get(`/api/results/sessions/${joinSessionId}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(adminResults.status).toBe(200);
+    expect(adminResults.body.data.participants).toHaveLength(1);
+
+    const csv = await request(app)
+      .get(`/api/results/sessions/${joinSessionId}/export.csv`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(csv.status).toBe(200);
+    expect(csv.headers['content-type']).toContain('text/csv');
+    expect(csv.text).toContain('participantIdentifier,displayName');
+    expect(csv.text).toContain('Alice');
+
     const duplicate = await request(app)
       .post(`/api/sessions/join/${joinPin}`)
       .send({ displayName: 'Alice' });
-    expect(duplicate.status).toBe(409);
-    expect(duplicate.body.error.code).toBe('DUPLICATE_PARTICIPANT');
+    expect(duplicate.status).toBe(201);
+    expect(duplicate.body.data.participant.displayName).toBe('Alice (1)');
 
     const invalidPin = await request(app)
       .post('/api/sessions/join/000000')
@@ -179,8 +205,8 @@ describe('participant joining', () => {
         request(app)        .post(`/api/sessions/join/${joinPin}`).send({ displayName: 'Concurrent' })
       )
     );
-    expect(concurrentResults.filter((response) => response.status === 201)).toHaveLength(1);
-    expect(concurrentResults.filter((response) => response.status === 409)).toHaveLength(3);
+    expect(concurrentResults.filter((response) => response.status === 201)).toHaveLength(4);
+    expect(new Set(concurrentResults.map((response) => response.body.data.participant.displayName)).size).toBe(4);
   });
 
   it('rejects joins after the lobby closes', async () => {
@@ -196,5 +222,16 @@ describe('participant joining', () => {
       .send({ displayName: 'Late' });
     expect(rejected.status).toBe(409);
     expect(rejected.body.error.code).toBe('SESSION_NOT_JOINABLE');
+
+    await prisma.gameSession.update({ where: { id: joinSessionId }, data: { status: SessionStatus.PODIUM } });
+    const certificate = await request(app).get(`/api/cert/${participantToken}`);
+    expect(certificate.status).toBe(200);
+    expect(certificate.body.data).toMatchObject({
+      participantName: 'Alice',
+      event: 'GLITCH IN REALITY',
+      verificationCode: expect.any(String)
+    });
+    const verified = await request(app).get(`/api/cert/verify/${certificate.body.data.verificationCode}`);
+    expect(verified.status).toBe(200);
   });
 });

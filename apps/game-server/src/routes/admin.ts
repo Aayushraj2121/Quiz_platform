@@ -19,6 +19,9 @@ export const createAdminRouter = (prisma: PrismaClient) => {
     const result = await loginAdmin(prisma, request.body.username, request.body.password);
     response.status(200).json({ success: true, data: result });
   });
+  router.get('/me', requireAdmin(prisma), (request, response) => {
+    response.json({ success: true, data: { admin: request.admin } });
+  });
   router.post('/logout', requireAdmin(prisma), (_request, response) => {
     response.status(204).send();
   });

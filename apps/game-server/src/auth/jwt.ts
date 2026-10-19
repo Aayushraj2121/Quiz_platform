@@ -19,7 +19,7 @@ export interface ParticipantTokenPayload {
 
 export const signAdminToken = (admin: Pick<AdminTokenPayload, 'sub' | 'username'>): string =>
   jwt.sign({ sub: admin.sub, username: admin.username, role: 'admin' }, env.JWT_SECRET, {
-    expiresIn: '8h',
+    expiresIn: '7d',
     issuer
   });
 
@@ -49,7 +49,7 @@ export const signParticipantToken = (
   jwt.sign(
     { sub: participant.sub, sessionId: participant.sessionId, participantIdentifier: participant.participantIdentifier, role: 'participant' },
     env.JWT_SECRET,
-    { expiresIn: '24h', issuer }
+    { expiresIn: '7d', issuer }
   );
 
 export const verifyParticipantToken = (token: string): ParticipantTokenPayload => {

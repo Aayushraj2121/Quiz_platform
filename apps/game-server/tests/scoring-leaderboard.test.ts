@@ -85,7 +85,8 @@ describe('server-authoritative scoring', () => {
           questionId: question.id,
           selectedOptionId: correctOptionId,
           isCorrect: true,
-          awardedPoints: 0
+          awardedPoints: 0,
+          responseTimeMs: 30_000
         },
         {
           participantId: incorrectParticipantId,
@@ -99,13 +100,13 @@ describe('server-authoritative scoring', () => {
 
     const result = await finalizeQuestion(prisma, sessionId, 'manual');
     expect(result.finalized).toBe(true);
-    expect(result.awardedPoints).toBe(100);
+    expect(result.awardedPoints).toBe(1_000);
 
     const participants = await prisma.participant.findMany({
       where: { sessionId },
       orderBy: { displayName: 'asc' }
     });
-    expect(participants.find((participant) => participant.id === correctParticipantId)?.totalScore).toBe(100);
+    expect(participants.find((participant) => participant.id === correctParticipantId)?.totalScore).toBe(1_000);
     expect(participants.find((participant) => participant.id === incorrectParticipantId)?.totalScore).toBe(0);
     expect(participants.find((participant) => participant.displayName === 'Unanswered player')?.totalScore).toBe(0);
   });
@@ -113,19 +114,19 @@ describe('server-authoritative scoring', () => {
   it('is idempotent when reveal/finalization is repeated', async () => {
     const repeated = await finalizeQuestion(prisma, sessionId, 'timer');
     expect(repeated.finalized).toBe(false);
-    expect(await prisma.participant.findUniqueOrThrow({ where: { id: correctParticipantId } }).then((item) => item.totalScore)).toBe(100);
+    expect(await prisma.participant.findUniqueOrThrow({ where: { id: correctParticipantId } }).then((item) => item.totalScore)).toBe(1_000);
   });
 
   it('returns deterministic competition ranks and isolates sessions', async () => {
     await prisma.participant.update({
       where: { id: incorrectParticipantId },
-      data: { totalScore: 100, correctCount: 1 }
+      data: { totalScore: 1_000, correctCount: 1 }
     });
     const otherSession = await prisma.gameSession.create({ data: { quizId, pin: '135790' } });
     await prisma.participant.create({ data: { sessionId: otherSession.id, displayName: 'Other session player', totalScore: 1000 } });
     const leaderboard = await getLeaderboard(prisma, sessionId);
-    expect(leaderboard[0]).toMatchObject({ rank: 1, displayName: 'Correct player', totalScore: 100 });
-    expect(leaderboard[1]).toMatchObject({ rank: 1, displayName: 'Incorrect player', totalScore: 100 });
+    expect(leaderboard[0]).toMatchObject({ rank: 1, displayName: 'Correct player', totalScore: 1_000 });
+    expect(leaderboard[1]).toMatchObject({ rank: 1, displayName: 'Incorrect player', totalScore: 1_000 });
     expect(leaderboard[2]).toMatchObject({ rank: 3, displayName: 'Unanswered player', totalScore: 0 });
     expect(leaderboard).toHaveLength(3);
     expect(leaderboard.some((entry) => entry.displayName === 'Other session player')).toBe(false);
@@ -145,7 +146,8 @@ describe('server-authoritative scoring', () => {
         questionId: question.id,
         selectedOptionId: correctOptionId,
         isCorrect: true,
-        awardedPoints: 0
+        awardedPoints: 0,
+        responseTimeMs: 30_000
       }
     });
 
@@ -154,6 +156,6 @@ describe('server-authoritative scoring', () => {
       finalizeQuestion(prisma, concurrentSession.id, 'timer')
     ]);
     expect(results.filter((result) => result.finalized)).toHaveLength(1);
-    expect(await prisma.participant.findUniqueOrThrow({ where: { id: participant.id } }).then((item) => item.totalScore)).toBe(100);
+    expect(await prisma.participant.findUniqueOrThrow({ where: { id: participant.id } }).then((item) => item.totalScore)).toBe(1_000);
   });
 });

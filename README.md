@@ -253,3 +253,48 @@ the current snapshot with `leaderboard:request` and payload
 `{ "sessionId": "<session-id>" }`. The acknowledgement contains the same
 safe entries and the requester receives `leaderboard:updated`. Requests for
 another session are rejected with `UNAUTHORIZED`.
+
+## Stage 9 results, export, and media
+
+The concise frontend integration contract is documented in
+[`docs/FRONTEND_HANDOFF.md`](docs/FRONTEND_HANDOFF.md).
+
+Session results are available to an authenticated admin or to the participant
+identified by a matching participant connection token:
+
+- `GET /api/results/sessions/:id`
+- `GET /api/results/sessions/:id/export.csv` (admin only)
+
+Participant result responses contain only that participant's safe identity,
+score summary, and answer history. Admin responses contain all participants'
+safe result fields. CSV columns are stable and ordered as:
+`participantIdentifier`, `displayName`, `email`, `studentId`, `totalScore`,
+`correctCount`, `questionOrder`, `question`, `selectedOption`, `isCorrect`,
+`awardedPoints`, `responseTimeMs`, `submittedAt`. CSV values use RFC 4180-style
+quoting for commas, quotes, and newlines.
+
+Administrators can upload question media with:
+
+```bash
+curl -X POST http://127.0.0.1:4000/api/media/questions/<question-id> \
+  -H "Authorization: Bearer <admin-jwt>" \
+  -F "file=@question.png"
+```
+
+Supported media types are PNG, JPEG, GIF, WebP, MP4, and WebM. Files are
+stored under `UPLOAD_DIR` with generated filenames, validated against common
+file signatures, and limited by `MAX_UPLOAD_BYTES` (10 MiB by default).
+Replacement is automatic when a question already has an asset. Admins can
+delete an asset with `DELETE /api/media/:id`.
+
+Media serving to participant clients is intentionally not exposed yet because
+the authoritative PRD does not specify whether assets should use private
+session-bound URLs, signed URLs, or a separate object-storage provider.
+Certificate eligibility and format, participant limits, speed/streak scoring,
+and token revocation likewise remain product decisions rather than silently
+selected backend behavior.
+
+The server remains intentionally single-process: Socket.IO timers are
+in-memory and are not coordinated across replicas. After restart, an active
+question must be recovered by an authorized host; no multi-instance support is
+claimed.

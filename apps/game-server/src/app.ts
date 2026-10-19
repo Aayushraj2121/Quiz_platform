@@ -10,6 +10,9 @@ import { createAdminRouter } from './routes/admin.js';
 import { createQuestionRouter } from './routes/questions.js';
 import { createQuizRouter } from './routes/quizzes.js';
 import { createSessionRouter } from './routes/sessions.js';
+import { createResultsRouter } from './routes/results.js';
+import { createMediaRouter } from './routes/media.js';
+import { createCertificateRouter } from './routes/certificates.js';
 
 export const createApp = (prisma: PrismaClient = defaultPrisma) => {
   const app = express();
@@ -30,6 +33,9 @@ export const createApp = (prisma: PrismaClient = defaultPrisma) => {
   app.use('/api/quizzes', createQuizRouter(prisma));
   app.use('/api/questions', createQuestionRouter(prisma));
   app.use('/api/sessions', createSessionRouter(prisma));
+  app.use('/api/results', createResultsRouter(prisma));
+  app.use('/api/media', createMediaRouter(prisma));
+  app.use('/api/cert', createCertificateRouter(prisma));
   app.use(notFoundHandler);
   app.use(errorHandler);
 

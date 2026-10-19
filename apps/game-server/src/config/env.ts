@@ -9,6 +9,10 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(32),
   CORS_ORIGINS: z.string().min(1).default('http://localhost:3000'),
   UPLOAD_DIR: z.string().min(1).default('./uploads'),
+  MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(104_857_600),
+  MAX_IMAGE_UPLOAD_BYTES: z.coerce.number().int().positive().default(10_485_760),
+  MAX_VIDEO_UPLOAD_BYTES: z.coerce.number().int().positive().default(104_857_600),
+  PUBLIC_APP_URL: z.string().url().default('http://localhost:3000'),
   MAX_JSON_BODY_SIZE: z.string().min(1).default('1mb')
 });
 

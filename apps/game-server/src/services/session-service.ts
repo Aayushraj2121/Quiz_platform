@@ -2,6 +2,7 @@ import { Prisma, PrismaClient, SessionStatus } from '@prisma/client';
 import { randomInt } from 'node:crypto';
 import { AppError } from '../middleware/error-handler.js';
 import { hashConnectionToken, signParticipantToken } from '../auth/jwt.js';
+import { env } from '../config/env.js';
 
 const safeSessionSelect = {
   id: true,
@@ -37,6 +38,7 @@ const transitions: Record<SessionStatus, readonly SessionStatus[]> = {
 };
 
 const generatePin = (): string => randomInt(100_000, 1_000_000).toString();
+const participantName = (name: string, suffix: number): string => suffix === 0 ? name : `${name} (${suffix})`;
 
 const isUniqueConstraintError = (error: unknown): boolean =>
   error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
@@ -154,16 +156,17 @@ export const joinSession = async (
     throw new AppError(409, 'SESSION_NOT_JOINABLE', 'This session is no longer accepting participants');
   }
 
-  try {
-    const participant = await prisma.participant.create({
-      data: {
-        sessionId: session.id,
-        displayName: data.displayName,
-        ...(data.email === undefined ? {} : { email: data.email }),
-        ...(data.studentId === undefined ? {} : { studentId: data.studentId })
-      },
-      select: safeParticipantSelect
-    });
+  for (let suffix = 0; suffix < 1000; suffix += 1) {
+    try {
+      const participant = await prisma.participant.create({
+        data: {
+          sessionId: session.id,
+          displayName: participantName(data.displayName, suffix),
+          ...(data.email === undefined ? {} : { email: data.email }),
+          ...(data.studentId === undefined ? {} : { studentId: data.studentId })
+        },
+        select: safeParticipantSelect
+      });
     const participantToken = signParticipantToken({
       sub: participant.id,
       sessionId: session.id,
@@ -174,15 +177,22 @@ export const joinSession = async (
       data: { tokenHash: hashConnectionToken(participantToken) }
     });
 
-    return {
-      session: { id: session.id, pin: session.pin, status: session.status, quiz: session.quiz },
-      participant,
-      connectionToken: participantToken
-    };
-  } catch (error) {
-    if (isUniqueConstraintError(error)) {
-      throw new AppError(409, 'DUPLICATE_PARTICIPANT', 'That display name is already in use for this session');
+      return {
+        session: {
+          id: session.id,
+          pin: session.pin,
+          status: session.status,
+          quiz: session.quiz,
+          joinUrl: `${env.PUBLIC_APP_URL}/join/${session.pin}`
+        },
+        participant,
+        connectionToken: participantToken
+      };
+    } catch (error) {
+      if (isUniqueConstraintError(error)) continue;
+      throw error;
     }
-    throw error;
   }
+
+  throw new AppError(409, 'DUPLICATE_PARTICIPANT', 'Unable to allocate a unique participant name');
 };

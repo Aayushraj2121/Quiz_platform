@@ -129,6 +129,23 @@ describe('quiz and question management', () => {
     expect(created.status).toBe(201);
     questionId = created.body.data.id;
 
+    const unsupportedMedia = await request(app)
+      .post(`/api/media/questions/${questionId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', Buffer.from('not-an-image'), 'payload.txt');
+    expect(unsupportedMedia.status).toBe(400);
+    expect(unsupportedMedia.body.error.code).toBe('MEDIA_REQUIRED');
+
+    const validMedia = await request(app)
+      .post(`/api/media/questions/${questionId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), 'question.png');
+    expect(validMedia.status).toBe(201);
+    const deletedMedia = await request(app)
+      .delete(`/api/media/${validMedia.body.data.id}`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(deletedMedia.status).toBe(204);
+
     const fetched = await request(app)
       .get(`/api/questions/${questionId}`)
       .set('Authorization', `Bearer ${token}`);

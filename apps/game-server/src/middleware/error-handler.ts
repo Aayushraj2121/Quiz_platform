@@ -1,6 +1,7 @@
 import type { ErrorRequestHandler, RequestHandler } from 'express';
 import { Prisma } from '@prisma/client';
 import { ZodError } from 'zod';
+import multer from 'multer';
 
 export class AppError extends Error {
   public readonly statusCode: number;
@@ -25,6 +26,16 @@ export const notFoundHandler: RequestHandler = (request, response) => {
 };
 
 export const errorHandler: ErrorRequestHandler = (error, _request, response, _next) => {
+  if (error instanceof multer.MulterError) {
+    response.status(error.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({
+      success: false,
+      error: {
+        code: error.code === 'LIMIT_FILE_SIZE' ? 'MEDIA_TOO_LARGE' : 'MEDIA_UPLOAD_ERROR',
+        message: error.code === 'LIMIT_FILE_SIZE' ? 'Uploaded media exceeds the configured size limit' : 'Media upload failed'
+      }
+    });
+    return;
+  }
   if (error instanceof ZodError) {
     response.status(400).json({
       success: false,

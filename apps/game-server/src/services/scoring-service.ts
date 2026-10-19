@@ -9,6 +9,15 @@ export interface FinalizeQuestionResult {
   status: SessionStatus;
   finalized: boolean;
   awardedPoints: number;
+  feedback: Array<{
+    participantId: string;
+    questionId: string;
+    correct: boolean;
+    points: number;
+    streak: number;
+    totalScore: number;
+  }>;
+  distribution: Array<{ optionId: string; count: number }>;
 }
 
 export interface LeaderboardEntry {
@@ -44,6 +53,7 @@ export const getLeaderboard = async (
     orderBy: [
       { totalScore: 'desc' },
       { correctCount: 'desc' },
+      { joinedAt: 'asc' },
       { participantIdentifier: 'asc' }
     ],
     select: leaderboardParticipantSelect
@@ -96,7 +106,9 @@ export const finalizeQuestion = async (
         questionId: question.id,
         status: session.status,
         finalized: false,
-        awardedPoints: 0
+        awardedPoints: 0,
+        feedback: [],
+        distribution: []
       };
     }
 
@@ -129,7 +141,9 @@ export const finalizeQuestion = async (
         questionId: question.id,
         status: SessionStatus.REVEAL,
         finalized: false,
-        awardedPoints: 0
+        awardedPoints: 0,
+        feedback: [],
+        distribution: []
       };
     }
 
@@ -156,32 +170,83 @@ export const finalizeQuestion = async (
     });
 
     let awardedPoints = 0;
+    const distribution = new Map<string, number>();
+    const feedback: FinalizeQuestionResult['feedback'] = [];
     for (const answer of answers) {
       const isCorrect = answer.selectedOptionId === correctOptionId;
-      const points = isCorrect ? POINTS_PER_CORRECT_ANSWER : 0;
+      distribution.set(answer.selectedOptionId, (distribution.get(answer.selectedOptionId) ?? 0) + 1);
       const updated = await transaction.answer.updateMany({
         where: { id: answer.id, awardedPoints: 0 },
-        data: { isCorrect, awardedPoints: points }
+        data: { isCorrect }
       });
 
-      if (updated.count === 1 && isCorrect) {
-        await transaction.participant.update({
-          where: { id: answer.participantId },
-          data: {
-            totalScore: { increment: points },
-            correctCount: { increment: 1 }
-          }
-        });
-        awardedPoints += points;
+      if (updated.count !== 1) continue;
+      const participant = await transaction.participant.findUniqueOrThrow({
+        where: { id: answer.participantId },
+        select: { totalScore: true, correctCount: true, streak: true }
+      });
+      const questionWithTiming = await transaction.question.findUniqueOrThrow({
+        where: { id: question.id },
+        select: { basePoints: true, timerSeconds: true }
+      });
+      const storedAnswer = await transaction.answer.findUniqueOrThrow({
+        where: { id: answer.id },
+        select: { responseTimeMs: true }
+      });
+      const remainingRatio = Math.max(0, Math.min(1, (storedAnswer.responseTimeMs ?? 0) / (questionWithTiming.timerSeconds * 1000)));
+      const basePoints = isCorrect
+        ? Math.round(questionWithTiming.basePoints * (0.5 + 0.5 * remainingRatio))
+        : 0;
+      const streak = isCorrect ? participant.streak + 1 : 0;
+      const streakBonus = isCorrect ? Math.min(500, Math.max(0, streak - 2) * 100) : 0;
+      const points = basePoints + streakBonus;
+      const updatedParticipant = await transaction.participant.update({
+        where: { id: answer.participantId },
+        data: {
+          totalScore: { increment: points },
+          ...(isCorrect ? { correctCount: { increment: 1 } } : {}),
+          streak
+        },
+        select: { totalScore: true, streak: true }
+      });
+      await transaction.answer.update({
+        where: { id: answer.id },
+        data: { awardedPoints: points }
+      });
+      awardedPoints += points;
+      feedback.push({
+        participantId: answer.participantId,
+        questionId: question.id,
+        correct: isCorrect,
+        points,
+        streak: updatedParticipant.streak,
+        totalScore: updatedParticipant.totalScore
+      });
+    }
+    for (const answer of await transaction.answer.findMany({
+      where: { questionId: question.id, participant: { sessionId } },
+      select: { selectedOptionId: true }
+    })) {
+      if (!distribution.has(answer.selectedOptionId)) {
+        distribution.set(answer.selectedOptionId, 0);
       }
     }
+    await transaction.participant.updateMany({
+      where: {
+        sessionId,
+        answers: { none: { questionId: question.id } }
+      },
+      data: { streak: 0 }
+    });
 
     return {
       sessionId,
       questionId: question.id,
       status: SessionStatus.REVEAL,
       finalized: true,
-      awardedPoints
+      awardedPoints,
+      feedback,
+      distribution: [...distribution.entries()].map(([optionId, count]) => ({ optionId, count }))
     };
   });
 };

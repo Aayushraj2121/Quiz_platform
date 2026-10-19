@@ -130,6 +130,16 @@ describe('Socket.IO gameplay engine', () => {
     if (!firstOption) throw new Error('Question did not include an option');
     expect(firstOption).not.toHaveProperty('isCorrect');
 
+    const reconnectingParticipant = await connectClient(participantToken, 'participant');
+    const replayedQuestion = waitForEvent<{ questionId: string; options: Array<{ id: string }> }>(reconnectingParticipant, 'question:started');
+    await new Promise<void>((resolvePromise, reject) => {
+      reconnectingParticipant.emit('participant:reconnect', { sessionId }, (response: AckResponse) =>
+        response.success ? resolvePromise() : reject(response.error)
+      );
+    });
+    expect((await replayedQuestion).questionId).toBe(question.questionId);
+    reconnectingParticipant.disconnect();
+
     const answerReceived = waitForEvent<{ participantId: string; questionId: string }>(host, 'answer:received');
     const answerAck = await new Promise<{ success: boolean; data?: { questionId: string } }>((resolvePromise) => {
       participant.emit(
@@ -153,7 +163,7 @@ describe('Socket.IO gameplay engine', () => {
       );
     });
     expect((await reveal).correctOptionId).toBe(firstOption.id);
-    expect((await leaderboard).entries.find((entry) => entry.displayName === 'Socket participant')?.totalScore).toBe(100);
+    expect((await leaderboard).entries.find((entry) => entry.displayName === 'Socket participant')?.totalScore).toBe(1_000);
     expect((await prisma.gameSession.findUnique({ where: { id: sessionId } }))?.status).toBe('REVEAL');
 
     host.disconnect();
