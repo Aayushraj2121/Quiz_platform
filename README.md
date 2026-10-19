@@ -1,16 +1,65 @@
 # GLITCH IN REALITY
 
-## Backend development
+GLITCH IN REALITY is a live quiz game for classrooms, events, and teams.
 
-The backend service is in `apps/game-server` and uses TypeScript, Express,
-Prisma, and SQLite for local development.
+One person acts as the **host**. The host creates a quiz, starts a game, and
+controls the questions. Everyone else joins from a phone or computer using a
+short game PIN, answers in real time, and sees the leaderboard and final
+results.
 
-### Requirements
+This repository contains both sides of the application:
+
+- **Admin control room** — create quizzes, add questions, upload media, launch
+  games, control the live session, and view results.
+- **Participant experience** — join with a PIN or QR code, answer questions,
+  see reveals and leaderboards, and view final results.
+- **Game server** — stores quiz data, protects admin actions, runs the live
+  game, calculates scores, and sends real-time updates.
+
+## What the finished app can do
+
+### For the host
+
+1. Sign in to the admin control room.
+2. Create a quiz and add two to four answer choices per question.
+3. Mark exactly one answer as correct.
+4. Set the question timer and optionally upload an image or video.
+5. Publish the quiz.
+6. Start a game session.
+7. Show the generated PIN or QR code to participants.
+8. Start questions, reveal answers, extend timers, advance the game, and end
+   the session.
+9. Review the leaderboard, results, CSV export, and certificates.
+
+### For participants
+
+1. Open the participant page.
+2. Enter the six-digit PIN, or scan the host's QR code.
+3. Enter a display name.
+4. Answer each question before the timer ends.
+5. See the answer reveal, score, leaderboard, podium, and final result.
+
+Duplicate display names are made unique automatically, for example
+`Alex`, `Alex (1)`, and `Alex (2)`.
+
+## Quick start for a local computer
+
+### What you need
 
 - Node.js 20 or newer
 - npm
 
-### Setup
+You do not need Docker or a separate database for local development. The app
+uses SQLite, which is a database file stored on your computer.
+
+### 1. Download the project
+
+```bash
+git clone https://github.com/Aayushraj2121/Quiz_platform.git
+cd Quiz_platform
+```
+
+### 2. Install the game server
 
 ```bash
 cd apps/game-server
@@ -18,304 +67,188 @@ npm install
 cp .env.example .env
 ```
 
-Set `DATABASE_URL` in `.env` to a SQLite URL such as
-`file:./prisma/dev.db`. The seed admin is created only when both
-`SEED_ADMIN_USERNAME` and `SEED_ADMIN_PASSWORD` are set.
+Open `apps/game-server/.env` and set a local admin login. For example:
 
-### Database commands
+```dotenv
+SEED_ADMIN_USERNAME=admin
+SEED_ADMIN_PASSWORD=admin
+JWT_SECRET=use-a-long-random-secret-with-at-least-32-characters
+CORS_ORIGINS=http://localhost:5173
+PUBLIC_APP_URL=http://localhost:5173
+```
 
-Generate the Prisma client:
+The example uses `admin`/`admin` only for a disposable local installation.
+Choose a stronger password anywhere else. The CORS and public URL values above
+match Vite's usual local port.
+
+### 3. Create the local database
+
+Run these commands from `apps/game-server`:
 
 ```bash
 npm run db:generate
-```
-
-Create and apply a development migration:
-
-```bash
-npm run db:migrate -- --name init
-```
-
-Apply committed migrations in a deployment environment:
-
-```bash
 npm run db:deploy
-```
-
-Run the repeatable development seed:
-
-```bash
 npm run db:seed
 ```
 
-The seed upserts a local development administrator when configured and a
-sample quiz with one question and three options. It never stores a plaintext
-password; the configured seed password is hashed before persistence.
+The seed creates the configured local admin account and a small sample quiz.
+It safely updates existing development seed data instead of creating a new
+duplicate every time.
 
-### Run and verify
+### 4. Install and configure the web app
+
+Open a second terminal at the repository root:
 
 ```bash
-npm run typecheck
-npm run build
-npm test
+cd apps/web
+npm install
+cp .env.example .env
+```
+
+The default web settings already point to the local game server:
+
+```dotenv
+VITE_API_URL=http://127.0.0.1:4000/api
+VITE_SOCKET_URL=http://127.0.0.1:4000
+```
+
+### 5. Start both parts
+
+In the first terminal, from `apps/game-server`:
+
+```bash
 npm run dev
 ```
 
-The health endpoint is available at `GET /api/health`.
-
-SQLite files, uploads, local environment files, dependencies, and build
-outputs are ignored by Git. Production deployments require persistent storage
-and backups for SQLite and uploaded media.
-
-## Stage 4 API
-
-Admin management endpoints require `Authorization: Bearer <token>`. Obtain a
-token with:
+In the second terminal, from `apps/web`:
 
 ```bash
-curl -X POST http://127.0.0.1:4000/api/admin/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"your-password"}'
+npm run dev
 ```
 
-Implemented protected endpoints:
+Open the URL shown by Vite, usually
+[`http://localhost:5173`](http://localhost:5173).
 
-- `POST /api/admin/login`
-- `POST /api/admin/logout`
-- `GET /api/quizzes?page=1&pageSize=20`
-- `POST /api/quizzes`
-- `GET /api/quizzes/:id`
-- `PATCH /api/quizzes/:id`
-- `DELETE /api/quizzes/:id`
-- `GET /api/questions/quiz/:id`
-- `POST /api/questions/quiz/:id`
-- `GET /api/questions/:id`
-- `PATCH /api/questions/:id`
-- `DELETE /api/questions/:id`
-- `POST /api/questions/:id/options`
-- `PATCH /api/questions/options/:id`
+- Choose **Admin** to open the control room.
+- Choose **Join game** to enter as a participant.
+- The server health check is available at
+  [`http://127.0.0.1:4000/api/health`](http://127.0.0.1:4000/api/health).
 
-Question creation and replacement updates require 2–4 options and exactly one
-correct option. Timer values are restricted to 10–120 seconds. Correct-answer
-flags are returned only from these admin-protected management endpoints; no
-participant/public API is exposed in this stage.
+## A simple first-use walkthrough
 
-Login is rate limited to 10 attempts per 15 minutes per client window. JWTs
-are signed with `JWT_SECRET` and expire after eight hours. Logout is stateless:
-the client must discard its token. A future token revocation mechanism can be
-added if required by the deployment model.
+1. Open the web app and choose **Admin**.
+2. Sign in with the username and password from
+   `apps/game-server/.env`.
+3. Create a quiz.
+4. Add at least one question, two to four options, and one correct option.
+5. Publish the quiz.
+6. Create a session from the published quiz.
+7. Open the participant page in another browser window or on a phone.
+8. Enter the displayed PIN, or scan the QR code.
+9. Join with a name.
+10. Return to the host control room and start the question.
 
-## Stage 5 API
+## Useful links and screens
 
-Session administration requires the same admin bearer token:
+| Purpose | Location |
+| --- | --- |
+| Participant and host web app | `apps/web` |
+| Game server | `apps/game-server` |
+| Frontend/backend integration contract | [`docs/FRONTEND_HANDOFF.md`](docs/FRONTEND_HANDOFF.md) |
+| End-to-end test cases | [`docs/E2E_TEST_CASES.md`](docs/E2E_TEST_CASES.md) |
+| Latest test report | [`docs/E2E_TEST_REPORT.md`](docs/E2E_TEST_REPORT.md) |
+| Database schema | `apps/game-server/prisma/schema.prisma` |
+| Backend environment template | `apps/game-server/.env.example` |
+| Frontend environment template | `apps/web/.env.example` |
 
-- `POST /api/sessions` with `{"quizId":"<published-quiz-id>"}`
-- `GET /api/sessions?page=1&pageSize=20`
-- `GET /api/sessions/:id`
-- `PATCH /api/sessions/:id/status` with `{"status":"QUESTION"}`
+## Privacy and safety basics
 
-Only published quizzes with at least one valid question can create a session.
-Each session receives a unique six-digit numeric PIN. Valid administrative
-status transitions are enforced by the `SessionStatus` state machine; this
-stage does not start timers or gameplay.
+- Admin passwords are stored as hashes, never as plain text.
+- Admin routes require a signed authentication token.
+- Participant tokens are checked against the participant's session.
+- Correct answers are not sent to participants before the reveal.
+- Scores, ranks, and correctness are calculated by the server.
+- Uploaded media receives generated filenames; the original filename is not
+  used as a storage path.
+- `.env` files, local databases, uploads, dependencies, and build output are
+  ignored by Git. Do not commit them.
 
-Participants join a lobby publicly:
+## Configuration
+
+The backend reads configuration from `apps/game-server/.env`:
+
+| Variable | Purpose | Local default |
+| --- | --- | --- |
+| `PORT` | Backend port | `4000` |
+| `HOST` | Backend host | `127.0.0.1` |
+| `DATABASE_URL` | SQLite database location | `file:./dev.db` |
+| `JWT_SECRET` | Secret used to sign tokens | Must be replaced |
+| `CORS_ORIGINS` | Allowed web-app origins | `http://localhost:3000` |
+| `UPLOAD_DIR` | Uploaded media folder | `./uploads` |
+| `PUBLIC_APP_URL` | URL encoded in join links and QR codes | `http://localhost:3000` |
+| `SEED_ADMIN_USERNAME` | Development admin username | `admin` |
+| `SEED_ADMIN_PASSWORD` | Development admin password | Must be replaced |
+
+Upload limits can be adjusted with `MAX_UPLOAD_BYTES`,
+`MAX_IMAGE_UPLOAD_BYTES`, and `MAX_VIDEO_UPLOAD_BYTES`. JSON request size can
+be adjusted with `MAX_JSON_BODY_SIZE`.
+
+The frontend reads configuration from `apps/web/.env`:
+
+| Variable | Purpose |
+| --- | --- |
+| `VITE_API_URL` | Backend REST URL, including `/api` |
+| `VITE_SOCKET_URL` | Backend origin used for Socket.IO |
+
+## Database commands
+
+Run these from `apps/game-server`:
 
 ```bash
-curl -X POST http://127.0.0.1:4000/api/sessions/join/123456 \
-  -H 'Content-Type: application/json' \
-  -d '{"displayName":"Alice","email":"alice@example.com","studentId":"S-1"}'
+npm run db:generate   # Generate the Prisma client
+npm run db:migrate    # Create a development migration
+npm run db:deploy     # Apply committed migrations
+npm run db:seed       # Seed/update local development data
 ```
 
-The join response contains only the session's public ID/PIN/status/quiz title
-and the joining participant's safe fields. Display names are unique within a
-session and concurrent duplicate joins are rejected by the database constraint.
-There is no configured participant-limit field in the current schema, so no
-limit is enforced in this stage. Join attempts are rate limited to 30 per
-15-minute client window.
+The main database models include administrators, quizzes, questions, answer
+options, live game sessions, participants, answers, certificates, and media
+assets.
 
-## Stage 6 Socket.IO API
+## Checks for developers
 
-The realtime server is attached to the same HTTP server as the REST API. Local
-clients connect to `http://127.0.0.1:4000` with a Socket.IO authentication
-handshake:
-
-```ts
-io("http://127.0.0.1:4000", {
-  auth: { role: "host", token: adminJwt }
-});
-
-io("http://127.0.0.1:4000", {
-  auth: { role: "participant", token: connectionToken }
-});
-```
-
-The participant `connectionToken` is issued by the successful Stage 5 join
-response. It is a signed JWT valid for 24 hours and is also stored only as a
-SHA-256 hash on the participant record. The server verifies the token claims,
-session association, participant existence, and stored hash on every socket
-connection. The token is not placed in URLs or logs. A future revocation
-mechanism can invalidate tokens by clearing/changing the stored hash.
-
-Client-to-server events:
-
-| Event | Payload | Ack | Authorization |
-| --- | --- | --- | --- |
-| `host:join` | `{sessionId}` | safe session state | host JWT |
-| `host:start-question` | `{sessionId, questionIndex}` | safe question | joined host |
-| `host:reveal-answer` | `{sessionId}` | success/error | joined host |
-| `host:advance-state` | `{sessionId, questionIndex?, endGame?}` | state/error | joined host |
-| `participant:join-game` | `{sessionId}` | safe state | matching participant token |
-| `participant:reconnect` | `{sessionId}` | safe state | matching participant token |
-| `participant:submit-answer` | `{sessionId, questionId, optionId}` | receipt only | matching participant token |
-
-Server-to-client events are `connection:ready`, `session:state`,
-`participant:joined`, `participant:count`, `question:started`,
-`question:timer`, `question:ended`, `answer:received`, `answer:revealed`, and
-`session:error`. Question broadcasts contain only option IDs and text;
-correctness is never sent before `answer:revealed`. Answer acknowledgements
-contain only acceptance and server timestamp, not correctness or score.
-
-Question deadlines are generated by the server from the stored question timer.
-The server rejects late answers, duplicate answers, invalid question/option
-relationships, and commands for sessions that are not in a valid state. Timer
-resources are cleared on reveal, advance, end-game, and server shutdown.
-Timers are intentionally in-memory for this single-process implementation.
-After a process restart, an interrupted `QUESTION` session has no surviving
-timer; an authorized host must explicitly reveal, advance, or end the session.
-Do not deploy multiple game-server instances without shared realtime state.
-
-## Stage 7 scoring and leaderboard
-
-The server awards a fixed **100 points** for each accepted correct answer.
-Incorrect and unanswered questions award zero points. There is no speed bonus
-in this stage, and a participant can score at most once per question. Correctness
-is recomputed from the stored selected option and the question's database
-answer during finalization; client payloads cannot provide points, correctness,
-rank, or score.
-
-Scoring runs in the same transaction that claims an active question for reveal.
-Manual host reveal and timer expiry use this shared finalization path, so
-repeated reveal commands and timer races are idempotent. Persisted participant
-scores survive process restarts. A failed transaction emits no leaderboard
-update; retrying the finalization is safe.
-
-Authenticated session viewers can retrieve:
+Backend:
 
 ```bash
-curl http://127.0.0.1:4000/api/sessions/<session-id>/leaderboard \
-  -H "Authorization: Bearer <admin-jwt-or-session-participant-token>"
+cd apps/game-server
+npm run typecheck
+npm run build
+npm test
 ```
 
-The response is:
-
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "rank": 1,
-      "participantIdentifier": "cl...",
-      "displayName": "Alice",
-      "totalScore": 100,
-      "correctCount": 1
-    }
-  ]
-}
-```
-
-Ordering is total score descending, correct-answer count descending, then
-participant identifier ascending. Rank uses competition ranking (`1, 1, 3`)
-based on total score. The endpoint verifies that participant tokens belong to
-the requested session; admins may view any existing session. It never returns
-tokens, token hashes, answer keys, or answer records.
-
-After a successful question finalization, only the corresponding session room
-receives `leaderboard:updated`:
-
-```json
-{
-  "sessionId": "cl...",
-  "entries": [
-    {
-      "rank": 1,
-      "participantIdentifier": "cl...",
-      "displayName": "Alice",
-      "totalScore": 100,
-      "correctCount": 1
-    }
-  ]
-}
-```
-
-An authenticated host or participant that has joined its session may request
-the current snapshot with `leaderboard:request` and payload
-`{ "sessionId": "<session-id>" }`. The acknowledgement contains the same
-safe entries and the requester receives `leaderboard:updated`. Requests for
-another session are rejected with `UNAUTHORIZED`.
-
-## Stage 9 results, export, and media
-
-The concise frontend integration contract is documented in
-[`docs/FRONTEND_HANDOFF.md`](docs/FRONTEND_HANDOFF.md).
-
-Session results are available to an authenticated admin or to the participant
-identified by a matching participant connection token:
-
-- `GET /api/results/sessions/:id`
-- `GET /api/results/sessions/:id/export.csv` (admin only)
-
-Participant result responses contain only that participant's safe identity,
-score summary, and answer history. Admin responses contain all participants'
-safe result fields. CSV columns are stable and ordered as:
-`participantIdentifier`, `displayName`, `email`, `studentId`, `totalScore`,
-`correctCount`, `questionOrder`, `question`, `selectedOption`, `isCorrect`,
-`awardedPoints`, `responseTimeMs`, `submittedAt`. CSV values use RFC 4180-style
-quoting for commas, quotes, and newlines.
-
-Administrators can upload question media with:
+Frontend:
 
 ```bash
-curl -X POST http://127.0.0.1:4000/api/media/questions/<question-id> \
-  -H "Authorization: Bearer <admin-jwt>" \
-  -F "file=@question.png"
+cd apps/web
+npm run typecheck
+npm run build
 ```
 
-Supported media types are PNG, JPEG, GIF, WebP, MP4, and WebM. Files are
-stored under `UPLOAD_DIR` with generated filenames, validated against common
-file signatures, and limited by `MAX_UPLOAD_BYTES` (10 MiB by default).
-Replacement is automatic when a question already has an asset. Admins can
-delete an asset with `DELETE /api/media/:id`.
-
-Media serving to participant clients is intentionally not exposed yet because
-the authoritative PRD does not specify whether assets should use private
-session-bound URLs, signed URLs, or a separate object-storage provider.
-Certificate eligibility and format, participant limits, speed/streak scoring,
-and token revocation likewise remain product decisions rather than silently
-selected backend behavior.
-
-The server remains intentionally single-process: Socket.IO timers are
-in-memory and are not coordinated across replicas. After restart, an active
-question must be recovered by an authorized host; no multi-instance support is
-claimed.
-
-## Frontend
-
-The initial PRD-driven React/Vite frontend lives in `apps/web`. It includes the
-participant entry flow, lobby, live question answering, personal reveal,
-leaderboard, podium, final results shell, and Socket.IO contract wiring.
+Prisma validation:
 
 ```bash
-cp apps/web/.env.example apps/web/.env
-npm --prefix apps/web install
-npm --prefix apps/web run dev
+cd apps/game-server
+npx prisma validate
 ```
 
-Set `VITE_API_URL` to the backend `/api` URL and `VITE_SOCKET_URL` to the
-backend origin. The frontend contract is documented in
-[`docs/FRONTEND_HANDOFF.md`](docs/FRONTEND_HANDOFF.md).
+## Important deployment note
 
-The control room now also supports admin login, quiz creation and publishing,
-question/option authoring, question media upload, session launch, live host
-controls, result inspection and authenticated CSV downloads, plus certificate
-verification.
+The current live-game timers are held in the memory of one game-server
+process. The application is suitable for local development and a
+single-process deployment. Do not run multiple game-server instances behind a
+load balancer until shared session state, timer coordination, and restart
+recovery have been added.
+
+For production, use a strong `JWT_SECRET`, a strong admin password, persistent
+database and media storage, HTTPS, backups, and a deployment configuration
+appropriate for your expected number of players.
