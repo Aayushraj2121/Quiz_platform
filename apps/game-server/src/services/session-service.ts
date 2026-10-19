@@ -152,7 +152,7 @@ export const joinSession = async (
   });
 
   if (!session) throw new AppError(404, 'SESSION_NOT_FOUND', 'Session not found');
-  if (session.status !== SessionStatus.LOBBY) {
+  if (session.status === SessionStatus.ENDED || session.status === SessionStatus.PODIUM) {
     throw new AppError(409, 'SESSION_NOT_JOINABLE', 'This session is no longer accepting participants');
   }
 
@@ -167,15 +167,15 @@ export const joinSession = async (
         },
         select: safeParticipantSelect
       });
-    const participantToken = signParticipantToken({
-      sub: participant.id,
-      sessionId: session.id,
-      participantIdentifier: participant.participantIdentifier
-    });
-    await prisma.participant.update({
-      where: { id: participant.id },
-      data: { tokenHash: hashConnectionToken(participantToken) }
-    });
+      const participantToken = signParticipantToken({
+        sub: participant.id,
+        sessionId: session.id,
+        participantIdentifier: participant.participantIdentifier
+      });
+      await prisma.participant.update({
+        where: { id: participant.id },
+        data: { tokenHash: hashConnectionToken(participantToken) }
+      });
 
       return {
         session: {
@@ -195,4 +195,9 @@ export const joinSession = async (
   }
 
   throw new AppError(409, 'DUPLICATE_PARTICIPANT', 'Unable to allocate a unique participant name');
+};
+
+export const deleteSession = async (prisma: PrismaClient, id: string): Promise<void> => {
+  await ensureSession(prisma, id);
+  await prisma.gameSession.delete({ where: { id } });
 };

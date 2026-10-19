@@ -1,0 +1,15 @@
+{
+  "name": "quiz-platform",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "node -e \"const { spawn } = require('child_process'); const b = spawn('npm', ['run', 'dev', '--prefix', 'apps/game-server'], { stdio: 'inherit' }); const f = spawn('npm', ['run', 'dev', '--prefix', 'apps/web'], { stdio: 'inherit' }); process.on('SIGINT', () => { b.kill(); f.kill(); process.exit(); });\"",
+    "dev:backend": "npm run dev --prefix apps/game-server",
+    "dev:frontend": "npm run dev --prefix apps/web",
+    "build": "npm run build --prefix apps/game-server && npm run build --prefix apps/web",
+    "test": "npm test --prefix apps/game-server"
+  }
+}
