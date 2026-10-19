@@ -4,3 +4,5 @@ apps/game-server/.env
 apps/game-server/uploads/
 apps/game-server/prisma/*.db
 apps/game-server/prisma/*.db-journal
+apps/game-server/prisma/prisma/*.db
+apps/game-server/prisma/prisma/*.db-journal

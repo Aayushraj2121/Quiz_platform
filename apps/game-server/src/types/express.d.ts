@@ -4,6 +4,10 @@ declare global {
   namespace Express {
     interface Request {
       admin?: Pick<Admin, 'id' | 'username'>;
+      participant?: {
+        id: string;
+        participantIdentifier: string;
+      };
     }
   }
 }

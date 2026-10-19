@@ -184,3 +184,72 @@ Timers are intentionally in-memory for this single-process implementation.
 After a process restart, an interrupted `QUESTION` session has no surviving
 timer; an authorized host must explicitly reveal, advance, or end the session.
 Do not deploy multiple game-server instances without shared realtime state.
+
+## Stage 7 scoring and leaderboard
+
+The server awards a fixed **100 points** for each accepted correct answer.
+Incorrect and unanswered questions award zero points. There is no speed bonus
+in this stage, and a participant can score at most once per question. Correctness
+is recomputed from the stored selected option and the question's database
+answer during finalization; client payloads cannot provide points, correctness,
+rank, or score.
+
+Scoring runs in the same transaction that claims an active question for reveal.
+Manual host reveal and timer expiry use this shared finalization path, so
+repeated reveal commands and timer races are idempotent. Persisted participant
+scores survive process restarts. A failed transaction emits no leaderboard
+update; retrying the finalization is safe.
+
+Authenticated session viewers can retrieve:
+
+```bash
+curl http://127.0.0.1:4000/api/sessions/<session-id>/leaderboard \
+  -H "Authorization: Bearer <admin-jwt-or-session-participant-token>"
+```
+
+The response is:
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "rank": 1,
+      "participantIdentifier": "cl...",
+      "displayName": "Alice",
+      "totalScore": 100,
+      "correctCount": 1
+    }
+  ]
+}
+```
+
+Ordering is total score descending, correct-answer count descending, then
+participant identifier ascending. Rank uses competition ranking (`1, 1, 3`)
+based on total score. The endpoint verifies that participant tokens belong to
+the requested session; admins may view any existing session. It never returns
+tokens, token hashes, answer keys, or answer records.
+
+After a successful question finalization, only the corresponding session room
+receives `leaderboard:updated`:
+
+```json
+{
+  "sessionId": "cl...",
+  "entries": [
+    {
+      "rank": 1,
+      "participantIdentifier": "cl...",
+      "displayName": "Alice",
+      "totalScore": 100,
+      "correctCount": 1
+    }
+  ]
+}
+```
+
+An authenticated host or participant that has joined its session may request
+the current snapshot with `leaderboard:request` and payload
+`{ "sessionId": "<session-id>" }`. The acknowledgement contains the same
+safe entries and the requester receives `leaderboard:updated`. Requests for
+another session are rejected with `UNAUTHORIZED`.

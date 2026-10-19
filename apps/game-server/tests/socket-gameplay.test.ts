@@ -143,12 +143,17 @@ describe('Socket.IO gameplay engine', () => {
     expect(await prisma.answer.count({ where: { participantId } })).toBe(1);
 
     const reveal = waitForEvent<{ correctOptionId: string }>(participant, 'answer:revealed');
+    const leaderboard = waitForEvent<{
+      sessionId: string;
+      entries: Array<{ totalScore: number; displayName: string }>;
+    }>(participant, 'leaderboard:updated');
     await new Promise<void>((resolvePromise, reject) => {
       host.emit('host:reveal-answer', { sessionId }, (response: AckResponse) =>
         response.success ? resolvePromise() : reject(response.error)
       );
     });
     expect((await reveal).correctOptionId).toBe(firstOption.id);
+    expect((await leaderboard).entries.find((entry) => entry.displayName === 'Socket participant')?.totalScore).toBe(100);
     expect((await prisma.gameSession.findUnique({ where: { id: sessionId } }))?.status).toBe('REVEAL');
 
     host.disconnect();

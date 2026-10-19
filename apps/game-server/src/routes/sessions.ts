@@ -2,8 +2,9 @@ import rateLimit from 'express-rate-limit';
 import { Router } from 'express';
 import { SessionStatus, PrismaClient } from '@prisma/client';
 import { z } from 'zod';
-import { requireAdmin } from '../middleware/auth.js';
+import { requireAdmin, requireSessionAccess } from '../middleware/auth.js';
 import { joinSession, createSession, getSession, listSessions, updateSessionStatus } from '../services/session-service.js';
+import { getLeaderboard } from '../services/scoring-service.js';
 import { validate } from '../validation/request.js';
 import {
   createSessionSchema,
@@ -28,6 +29,11 @@ export const createSessionRouter = (prisma: PrismaClient) => {
   router.post('/join/:id', joinLimiter, validate(joinSessionSchema, 'body'), async (request, response) => {
     const { id: pin } = pinSchema.parse(request.params);
     response.status(201).json({ success: true, data: await joinSession(prisma, pin, request.body) });
+  });
+
+  router.get('/:id/leaderboard', requireSessionAccess(prisma), validate(sessionIdParamSchema, 'params'), async (request, response) => {
+    const { id } = sessionIdParamSchema.parse(request.params);
+    response.json({ success: true, data: await getLeaderboard(prisma, id) });
   });
 
   router.use(requireAdmin(prisma));

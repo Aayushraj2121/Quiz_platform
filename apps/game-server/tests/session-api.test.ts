@@ -145,6 +145,16 @@ describe('participant joining', () => {
       status: 'LOBBY',
       quiz: { id: quizId, title: 'Session quiz' }
     });
+    const leaderboard = await request(app)
+      .get(`/api/sessions/${joinSessionId}/leaderboard`)
+      .set('Authorization', `Bearer ${valid.body.data.connectionToken}`);
+    expect(leaderboard.status).toBe(200);
+    expect(leaderboard.body.data[0]).toMatchObject({
+      displayName: 'Alice',
+      rank: 1,
+      totalScore: 0,
+      correctCount: 0
+    });
 
     const duplicate = await request(app)
       .post(`/api/sessions/join/${joinPin}`)
