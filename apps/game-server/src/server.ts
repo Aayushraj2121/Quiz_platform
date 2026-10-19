@@ -1,10 +1,12 @@
 import { createServer } from 'node:http';
 import { createApp } from './app.js';
 import { env } from './config/env.js';
-import { disconnectDatabase } from './db/client.js';
+import { disconnectDatabase, prisma } from './db/client.js';
+import { RealtimeGameServer } from './realtime/socket-server.js';
 
 const app = createApp();
 const server = createServer(app);
+const realtime = new RealtimeGameServer(prisma, server);
 
 server.listen(env.PORT, env.HOST, () => {
   console.log(
@@ -20,6 +22,7 @@ server.listen(env.PORT, env.HOST, () => {
 
 const shutdown = (signal: string) => {
   console.log(JSON.stringify({ level: 'info', message: 'Shutting down game server', signal }));
+  void realtime.close();
   server.close((error) => {
     if (error) {
       console.error(

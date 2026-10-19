@@ -1,6 +1,7 @@
 import { Prisma, PrismaClient, SessionStatus } from '@prisma/client';
 import { randomInt } from 'node:crypto';
 import { AppError } from '../middleware/error-handler.js';
+import { hashConnectionToken, signParticipantToken } from '../auth/jwt.js';
 
 const safeSessionSelect = {
   id: true,
@@ -163,10 +164,20 @@ export const joinSession = async (
       },
       select: safeParticipantSelect
     });
+    const participantToken = signParticipantToken({
+      sub: participant.id,
+      sessionId: session.id,
+      participantIdentifier: participant.participantIdentifier
+    });
+    await prisma.participant.update({
+      where: { id: participant.id },
+      data: { tokenHash: hashConnectionToken(participantToken) }
+    });
 
     return {
       session: { id: session.id, pin: session.pin, status: session.status, quiz: session.quiz },
-      participant
+      participant,
+      connectionToken: participantToken
     };
   } catch (error) {
     if (isUniqueConstraintError(error)) {
