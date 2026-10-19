@@ -38,6 +38,7 @@ export interface SafeQuestion {
   timerSeconds: number;
   deadline: string;
   mediaAssetId: string | null;
+  mediaMimeType: string | null;
   options: Array<{ id: string; text: string }>;
 }
 

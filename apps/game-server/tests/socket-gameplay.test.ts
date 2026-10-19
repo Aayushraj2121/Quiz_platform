@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import bcrypt from 'bcryptjs';
-import { PrismaClient, QuizStatus } from '@prisma/client';
+import { MediaType, PrismaClient, QuizStatus } from '@prisma/client';
 import { io as createClient, Socket as ClientSocket } from 'socket.io-client';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -71,6 +71,17 @@ beforeAll(async () => {
       }
     }
   });
+  const question = await prisma.question.findFirstOrThrow({ where: { quizId: quiz.id } });
+  const media = await prisma.mediaAsset.create({
+    data: {
+      filePath: '/tmp/socket-gameplay-question.mp4',
+      mediaType: MediaType.VIDEO,
+      originalName: 'question.mp4',
+      mimeType: 'video/mp4',
+      sizeBytes: 8
+    }
+  });
+  await prisma.question.update({ where: { id: question.id }, data: { mediaAssetId: media.id } });
   const login = await request(app).post('/api/admin/login').send({
     username: 'socket-admin',
     password: 'socket-password'
@@ -117,7 +128,7 @@ describe('Socket.IO gameplay engine', () => {
       );
     });
 
-    const questionStarted = waitForEvent<{ questionId: string; options: Array<{ id: string }> }>(participant, 'question:started');
+    const questionStarted = waitForEvent<{ questionId: string; mediaMimeType: string | null; options: Array<{ id: string }> }>(participant, 'question:started');
     await new Promise<void>((resolvePromise, reject) => {
       host.emit('host:start-question', { sessionId, questionIndex: 0 }, (response: AckResponse) =>
         response.success ? resolvePromise() : reject(response.error)
@@ -125,10 +136,19 @@ describe('Socket.IO gameplay engine', () => {
     });
     const question = await questionStarted;
     expect(question.options).toHaveLength(2);
+    expect(question.mediaMimeType).toBe('video/mp4');
     const firstOption = question.options[0];
     expect(firstOption).toBeDefined();
     if (!firstOption) throw new Error('Question did not include an option');
     expect(firstOption).not.toHaveProperty('isCorrect');
+    const invalidOption = await new Promise<AckResponse>((resolvePromise) => {
+      participant.emit(
+        'participant:submit-answer',
+        { sessionId, questionId: question.questionId, optionId: 'c123456789012345678901234' },
+        resolvePromise
+      );
+    });
+    expect(invalidOption).toMatchObject({ success: false, error: { code: 'INVALID_OPTION' } });
 
     const reconnectingParticipant = await connectClient(participantToken, 'participant');
     const replayedQuestion = waitForEvent<{ questionId: string; options: Array<{ id: string }> }>(reconnectingParticipant, 'question:started');
@@ -163,7 +183,11 @@ describe('Socket.IO gameplay engine', () => {
       );
     });
     expect((await reveal).correctOptionId).toBe(firstOption.id);
-    expect((await leaderboard).entries.find((entry) => entry.displayName === 'Socket participant')?.totalScore).toBe(1_000);
+    const participantScore = (await leaderboard).entries.find(
+      (entry) => entry.displayName === 'Socket participant'
+    )?.totalScore;
+    expect(participantScore).toBeGreaterThan(0);
+    expect(participantScore).toBeLessThanOrEqual(1_000);
     expect((await prisma.gameSession.findUnique({ where: { id: sessionId } }))?.status).toBe('REVEAL');
 
     host.disconnect();

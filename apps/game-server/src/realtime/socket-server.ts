@@ -91,6 +91,7 @@ interface SafeQuestionPayload {
   timerSeconds: number;
   deadline: string;
   mediaAssetId: string | null;
+  mediaMimeType: string | null;
   options: Array<{ id: string; text: string }>;
 }
 
@@ -249,7 +250,10 @@ export class RealtimeGameServer {
     }
     const question = await this.prisma.question.findFirst({
       where: { quizId: session.quizId, order: parsed.data.questionIndex + 1 },
-      include: { options: { select: { id: true, text: true } } }
+      include: {
+        options: { select: { id: true, text: true } },
+        mediaAsset: { select: { mimeType: true } }
+      }
     });
     if (!question) return ackError(socket, ack, 'NOT_FOUND', 'Question not found');
     const deadline = new Date(Date.now() + question.timerSeconds * 1000);
@@ -269,6 +273,7 @@ export class RealtimeGameServer {
       timerSeconds: question.timerSeconds,
       deadline: deadline.toISOString(),
       mediaAssetId: question.mediaAssetId,
+      mediaMimeType: question.mediaAsset?.mimeType ?? null,
       options: question.options
     };
     this.io.to(roomFor(session.id)).emit('question:started', safeQuestion);
@@ -545,7 +550,10 @@ export class RealtimeGameServer {
     if (!session || session.status !== SessionStatus.QUESTION || !session.currentQuestionDeadline) return null;
     const question = await this.prisma.question.findFirst({
       where: { quizId: session.quizId, order: session.currentQuestionIndex + 1 },
-      include: { options: { select: { id: true, text: true } } }
+      include: {
+        options: { select: { id: true, text: true } },
+        mediaAsset: { select: { mimeType: true } }
+      }
     });
     if (!question) return null;
     return {
@@ -557,6 +565,7 @@ export class RealtimeGameServer {
       timerSeconds: question.timerSeconds,
       deadline: session.currentQuestionDeadline.toISOString(),
       mediaAssetId: question.mediaAssetId,
+      mediaMimeType: question.mediaAsset?.mimeType ?? null,
       options: question.options
     };
   }

@@ -11,7 +11,7 @@ export const updateSessionStatusSchema = z.object({
 });
 
 export const joinSessionSchema = z.object({
-  displayName: z.string().trim().min(1).max(100),
+  displayName: z.string().trim().min(1).max(40),
   email: z.string().trim().email().max(320).optional(),
   studentId: z.string().trim().min(1).max(100).optional()
 });

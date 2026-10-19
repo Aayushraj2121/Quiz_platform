@@ -193,6 +193,11 @@ describe('participant joining', () => {
       .send({ displayName: 'Unknown' });
     expect(invalidPin.status).toBe(404);
 
+    const oversizedName = await request(app)
+      .post(`/api/sessions/join/${joinPin}`)
+      .send({ displayName: 'x'.repeat(41) });
+    expect(oversizedName.status).toBe(400);
+
     const malformedPin = await request(app)
       .post('/api/sessions/join/not-a-pin')
       .send({ displayName: 'Unknown' });
