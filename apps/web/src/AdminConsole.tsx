@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
-  createQuestion, createQuiz, createSession, deleteQuestion, deleteSession, getQuiz, getSessionResults, listQuizzes,
+  createQuestion, createQuiz, createSession, deleteQuestion, deleteQuiz, deleteSession, getQuiz, getSessionResults, listQuizzes,
   listSessions, loginAdmin, updateQuiz, uploadMedia, verifyCertificate
 } from './api';
 import { createQuizSocket, type QuizSocket } from './socket';
@@ -158,6 +158,18 @@ function QuizWorkspace({ token, quizzes, selectedQuiz, onSelect, onCreated, onUp
     if (!selectedQuiz) return;
     try { await updateQuiz(token, selectedQuiz.id, { status }); onUpdated(); } catch (cause) { onError(cause instanceof Error ? cause.message : 'Unable to update quiz'); }
   };
+  const removeQuiz = async () => {
+    if (!selectedQuiz) return;
+    const confirmed = window.confirm(`Are you sure you want to delete "${selectedQuiz.title}" and all its questions? This cannot be undone.`);
+    if (!confirmed) return;
+    try {
+      await deleteQuiz(token, selectedQuiz.id);
+      onSelect('');
+      onUpdated();
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : 'Unable to delete quiz');
+    }
+  };
   const addOption = () => {
     if (question.options.length >= 4) return;
     setQuestion({ ...question, options: [...question.options, { text: '', isCorrect: false }] });
@@ -203,6 +215,9 @@ function QuizWorkspace({ token, quizzes, selectedQuiz, onSelect, onCreated, onUp
                 <div className="button-row">
                   <button onClick={() => publish(selectedQuiz.status === 'PUBLISHED' ? 'DRAFT' : 'PUBLISHED')}>
                     {selectedQuiz.status === 'PUBLISHED' ? 'Unpublish' : 'Publish quiz'}
+                  </button>
+                  <button className="ghost-danger" type="button" onClick={removeQuiz}>
+                    Delete quiz
                   </button>
                 </div>
               </div>
@@ -270,8 +285,75 @@ function QuizWorkspace({ token, quizzes, selectedQuiz, onSelect, onCreated, onUp
 
 function QuestionCard({ question, token, onDeleted, onError }: { question: QuizQuestion; token: string; onDeleted: () => void; onError: (message: string) => void }) {
   const [busy, setBusy] = useState(false);
-  const remove = async () => { setBusy(true); try { await deleteQuestion(token, question.id); onDeleted(); } catch (cause) { onError(cause instanceof Error ? cause.message : 'Unable to delete question'); } finally { setBusy(false); } };
-  return <article className="question-card"><div><span className="question-number">Q{String(question.order).padStart(2, '0')}</span><h3>{question.text}</h3><p>{question.timerSeconds}s · {question.basePoints.toLocaleString()} points · {question.options.length} options</p></div><button className="ghost-danger" onClick={remove} disabled={busy}>Delete</button></article>;
+  const [uploading, setUploading] = useState(false);
+  const apiBase = (import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:4000/api').replace(/\/+$/, '');
+  const mediaUrl = question.mediaAssetId ? `${apiBase}/media/${question.mediaAssetId}` : null;
+
+  const remove = async () => {
+    if (!window.confirm(`Delete question Q${question.order}?`)) return;
+    setBusy(true);
+    try {
+      await deleteQuestion(token, question.id);
+      onDeleted();
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : 'Unable to delete question');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleUpload = async (file: File) => {
+    setUploading(true);
+    try {
+      await uploadMedia(token, question.id, file);
+      onDeleted();
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : 'Failed to upload media');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <article className="question-card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <span className="question-number">Q{String(question.order).padStart(2, '0')}</span>
+        <h3>{question.text}</h3>
+        <p>{question.timerSeconds}s · {question.basePoints.toLocaleString()} points · {question.options.length} options</p>
+        {mediaUrl && (
+          <div style={{ marginTop: 8 }}>
+            <img
+              src={mediaUrl}
+              alt="Question media preview"
+              style={{ maxHeight: 90, maxWidth: 160, borderRadius: 6, objectFit: 'contain', border: '1px solid var(--border, #334155)', background: '#0b1329' }}
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.opacity = '0.4';
+                (e.currentTarget as HTMLImageElement).title = 'Image failed to load';
+              }}
+            />
+          </div>
+        )}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flexShrink: 0 }}>
+        <label style={{ cursor: 'pointer', fontSize: 12, padding: '5px 10px', background: 'var(--card-bg, #1e293b)', border: '1px solid var(--border, #334155)', borderRadius: 4, color: 'var(--text-main, #e2e8f0)', display: 'inline-block' }}>
+          {uploading ? 'Uploading…' : mediaUrl ? 'Replace image' : '+ Add image'}
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp,video/mp4,video/webm"
+            style={{ display: 'none' }}
+            disabled={uploading}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void handleUpload(f);
+            }}
+          />
+        </label>
+        <button className="ghost-danger" onClick={remove} disabled={busy}>
+          {busy ? 'Deleting…' : 'Delete'}
+        </button>
+      </div>
+    </article>
+  );
 }
 
 function SessionWorkspace({ token, sessions, quizzes, onChanged, onResults, onHost, onError }: { token: string; sessions: AdminSession[]; quizzes: QuizSummary[]; onChanged: (msg?: string) => void; onResults: (session: AdminSession) => void; onHost: (session: AdminSession) => void; onError: (message: string) => void }) {

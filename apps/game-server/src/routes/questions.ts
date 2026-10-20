@@ -26,7 +26,7 @@ export const createQuestionRouter = (prisma: PrismaClient) => {
   router.delete('/:id', validate(idParamSchema, 'params'), async (request, response) => {
     const { id } = idParamSchema.parse(request.params);
     await deleteQuestion(prisma, id);
-    response.status(204).send();
+    response.status(200).json({ success: true, data: { id, deleted: true } });
   });
   router.post('/:id/options', validate(idParamSchema, 'params'), validate(createOptionSchema, 'body'), async (request, response) => {
     const { id } = idParamSchema.parse(request.params);

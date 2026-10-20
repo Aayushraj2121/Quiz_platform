@@ -97,15 +97,15 @@ export const createMediaRouter = (prisma: PrismaClient) => {
     });
     if (!question) throw new AppError(404, 'NOT_FOUND', 'Question not found');
 
-    // Build a unique storage key: "media/<uuid>.<ext>"
-    const storageKey = `media/${randomUUID()}${extension}`;
+    // Build a unique storage key: "<uuid>.<ext>"
+    const storageKey = `${randomUUID()}${extension}`;
 
-    // Upload to Supabase Storage
+    // Upload to Supabase Storage (upsert: true overwrites without 409 conflict)
     const { error: uploadError } = await supabase.storage
       .from(env.SUPABASE_STORAGE_BUCKET)
       .upload(storageKey, file.buffer, {
         contentType: file.mimetype,
-        upsert: false
+        upsert: true
       });
 
     if (uploadError) {
@@ -180,7 +180,7 @@ export const createMediaRouter = (prisma: PrismaClient) => {
     // Best-effort delete from Supabase Storage
     await supabase.storage.from(env.SUPABASE_STORAGE_BUCKET).remove([asset.storageKey]);
 
-    response.status(204).send();
+    response.status(200).json({ success: true, data: { id, deleted: true } });
   });
 
   return router;

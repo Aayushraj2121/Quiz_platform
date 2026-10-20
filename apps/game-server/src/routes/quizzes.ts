@@ -27,7 +27,7 @@ export const createQuizRouter = (prisma: PrismaClient) => {
   router.delete('/:id', validate(idParamSchema, 'params'), async (request, response) => {
     const { id } = idParamSchema.parse(request.params);
     await deleteQuiz(prisma, id);
-    response.status(204).send();
+    response.status(200).json({ success: true, data: { id, deleted: true } });
   });
   return router;
 };
