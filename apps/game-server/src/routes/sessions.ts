@@ -1,6 +1,7 @@
 import rateLimit from 'express-rate-limit';
 import { Router } from 'express';
 import { SessionStatus, PrismaClient } from '@prisma/client';
+import { env } from '../config/env.js';
 import { z } from 'zod';
 import { requireAdmin, requireSessionAccess } from '../middleware/auth.js';
 import { joinSession, createSession, getSession, listSessions, updateSessionStatus, deleteSession } from '../services/session-service.js';
@@ -56,7 +57,7 @@ export const createSessionRouter = (prisma: PrismaClient) => {
                 timerSeconds: true,
                 basePoints: true,
                 mediaAssetId: true,
-                mediaAsset: { select: { mimeType: true } },
+                mediaAsset: { select: { mimeType: true, storageKey: true } },
                 options: {
                   select: { id: true, text: true }
                 }
@@ -67,7 +68,14 @@ export const createSessionRouter = (prisma: PrismaClient) => {
       }
     });
     if (!session) return response.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Session not found' } });
-    response.json({ success: true, data: session.quiz.questions });
+    const publicBase = `${env.SUPABASE_URL.replace(/\/+$/, '')}/storage/v1/object/public/${env.SUPABASE_STORAGE_BUCKET}`;
+    const questions = session.quiz.questions.map((q) => ({
+      ...q,
+      mediaUrl: q.mediaAsset?.storageKey && !q.mediaAsset.storageKey.startsWith('/')
+        ? `${publicBase}/${q.mediaAsset.storageKey}`
+        : null
+    }));
+    response.json({ success: true, data: questions });
   });
 
   router.use(requireAdmin(prisma));

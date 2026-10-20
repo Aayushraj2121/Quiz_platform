@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
+import { env } from '../config/env.js';
 import { AppError } from '../middleware/error-handler.js';
 import type { CreateQuestionInput } from '../validation/request.js';
 
@@ -34,7 +35,16 @@ export const getQuiz = async (prisma: PrismaClient, id: string) => {
     }
   });
   if (!quiz) throw new AppError(404, 'NOT_FOUND', 'Quiz not found');
-  return quiz;
+  const publicBase = `${env.SUPABASE_URL.replace(/\/+$/, '')}/storage/v1/object/public/${env.SUPABASE_STORAGE_BUCKET}`;
+  return {
+    ...quiz,
+    questions: quiz.questions.map((q) => ({
+      ...q,
+      mediaUrl: q.mediaAsset?.storageKey && !q.mediaAsset.storageKey.startsWith('/')
+        ? `${publicBase}/${q.mediaAsset.storageKey}`
+        : null
+    }))
+  };
 };
 
 export const createQuiz = (prisma: PrismaClient, data: Prisma.QuizCreateInput) =>
