@@ -25,6 +25,7 @@ export interface QuizQuestionItem {
   basePoints: number;
   mediaAssetId: string | null;
   mediaAsset?: { mimeType: string } | null;
+  mediaUrl?: string | null;
   options: Array<{ id: string; text: string }>;
 }
 
@@ -63,6 +64,7 @@ export interface SafeQuestion {
   deadline: string;
   mediaAssetId: string | null;
   mediaMimeType: string | null;
+  mediaUrl?: string | null;
   options: Array<{ id: string; text: string }>;
 }
 
@@ -117,6 +119,7 @@ export interface QuizQuestion {
   timerSeconds: number;
   basePoints: number;
   mediaAssetId: string | null;
+  mediaUrl?: string | null;
   options: Array<{ id: string; text: string; isCorrect: boolean }>;
   mediaAsset?: { id: string; mimeType: string; originalName: string; sizeBytes: number } | null;
 }

@@ -451,9 +451,9 @@ function QuestionView({
   }, [timeLeft, selectedOption, answerResult]);
 
   const apiBase = (import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api').replace(/\/+$/, '');
-  const mediaUrl = question.mediaAssetId
-    ? `${apiBase}/media/${question.mediaAssetId}`
-    : '';
+  const mediaUrl =
+    question.mediaUrl ||
+    (question.mediaAssetId ? `${apiBase}/media/${question.mediaAssetId}` : '');
   // Support both REST shape (mediaAsset.mimeType) and socket shape (mediaMimeType)
   const resolvedMimeType =
     question.mediaAsset?.mimeType ??

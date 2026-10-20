@@ -287,7 +287,7 @@ function QuestionCard({ question, token, onDeleted, onError }: { question: QuizQ
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const apiBase = (import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:4000/api').replace(/\/+$/, '');
-  const mediaUrl = question.mediaAssetId ? `${apiBase}/media/${question.mediaAssetId}` : null;
+  const mediaUrl = question.mediaUrl || (question.mediaAssetId ? `${apiBase}/media/${question.mediaAssetId}` : null);
 
   const remove = async () => {
     if (!window.confirm(`Delete question Q${question.order}?`)) return;

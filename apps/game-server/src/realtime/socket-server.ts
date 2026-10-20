@@ -92,6 +92,7 @@ interface SafeQuestionPayload {
   deadline: string;
   mediaAssetId: string | null;
   mediaMimeType: string | null;
+  mediaUrl?: string | null;
   options: Array<{ id: string; text: string }>;
 }
 
@@ -294,7 +295,7 @@ export class RealtimeGameServer {
       where: { quizId: session.quizId, order: parsed.data.questionIndex + 1 },
       include: {
         options: { select: { id: true, text: true } },
-        mediaAsset: { select: { mimeType: true } }
+        mediaAsset: { select: { mimeType: true, storageKey: true } }
       }
     });
     if (!question) return ackError(socket, ack, 'NOT_FOUND', 'Question not found');
@@ -306,6 +307,7 @@ export class RealtimeGameServer {
     });
     this.clearTimer(session.id);
     this.startTimer(session.id, question.id, deadline);
+    const publicBase = `${env.SUPABASE_URL.replace(/\/+$/, '')}/storage/v1/object/public/${env.SUPABASE_STORAGE_BUCKET}`;
     const safeQuestion: SafeQuestionPayload = {
       sessionId: session.id,
       questionId: question.id,
@@ -316,6 +318,9 @@ export class RealtimeGameServer {
       deadline: deadline.toISOString(),
       mediaAssetId: question.mediaAssetId,
       mediaMimeType: question.mediaAsset?.mimeType ?? null,
+      mediaUrl: question.mediaAsset?.storageKey && !question.mediaAsset.storageKey.startsWith('/')
+        ? `${publicBase}/${question.mediaAsset.storageKey}`
+        : null,
       options: question.options
     };
     this.io.to(roomFor(session.id)).emit('question:started', safeQuestion);
@@ -672,10 +677,11 @@ export class RealtimeGameServer {
       where: { quizId: session.quizId, order: session.currentQuestionIndex + 1 },
       include: {
         options: { select: { id: true, text: true } },
-        mediaAsset: { select: { mimeType: true } }
+        mediaAsset: { select: { mimeType: true, storageKey: true } }
       }
     });
     if (!question) return null;
+    const publicBase = `${env.SUPABASE_URL.replace(/\/+$/, '')}/storage/v1/object/public/${env.SUPABASE_STORAGE_BUCKET}`;
     return {
       sessionId: session.id,
       questionId: question.id,
@@ -686,6 +692,9 @@ export class RealtimeGameServer {
       deadline: session.currentQuestionDeadline.toISOString(),
       mediaAssetId: question.mediaAssetId,
       mediaMimeType: question.mediaAsset?.mimeType ?? null,
+      mediaUrl: question.mediaAsset?.storageKey && !question.mediaAsset.storageKey.startsWith('/')
+        ? `${publicBase}/${question.mediaAsset.storageKey}`
+        : null,
       options: question.options
     };
   }
