@@ -11,7 +11,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "prisma generate && tsc -p tsconfig.json",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/src/server.js",
     "test": "vitest run",
@@ -32,7 +32,10 @@
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.4.0",
+    "prisma": "^6.19.0",
     "socket.io": "^4.8.1",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
     "zod": "^3.25.76"
   },
   "devDependencies": {
@@ -41,11 +44,8 @@
     "@types/jsonwebtoken": "^9.0.9",
     "@types/node": "^22.15.30",
     "@types/supertest": "^6.0.3",
-    "prisma": "^6.19.0",
     "socket.io-client": "^4.8.1",
     "supertest": "^7.1.1",
-    "tsx": "^4.19.4",
-    "typescript": "^5.8.3",
     "vitest": "^3.2.4"
   }
 }
