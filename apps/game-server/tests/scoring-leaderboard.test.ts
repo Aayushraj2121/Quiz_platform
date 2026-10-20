@@ -1,14 +1,10 @@
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
-import { PrismaClient, QuizStatus, SessionStatus } from '@prisma/client';
+import { QuizStatus, SessionStatus } from '@prisma/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { finalizeQuestion, getLeaderboard } from '../src/services/scoring-service.js';
+import { createTestDatabase } from './test-database.js';
 
-const temporaryDirectory = mkdtempSync(resolve(tmpdir(), 'quiz-platform-scoring-'));
-const databaseUrl = `file:${resolve(temporaryDirectory, 'test.db')}`;
-const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+const testDatabase = createTestDatabase('scoring');
+const prisma = testDatabase.prisma;
 let quizId = '';
 let sessionId = '';
 let correctParticipantId = '';
@@ -17,11 +13,7 @@ let correctOptionId = '';
 let incorrectOptionId = '';
 
 beforeAll(async () => {
-  execFileSync(resolve('node_modules/.bin/prisma'), ['migrate', 'deploy'], {
-    cwd: process.cwd(),
-    env: { ...process.env, DATABASE_URL: databaseUrl },
-    stdio: 'pipe'
-  });
+  await testDatabase.migrate();
   const quiz = await prisma.quiz.create({
     data: {
       title: 'Scoring quiz',
@@ -50,9 +42,18 @@ beforeAll(async () => {
   correctOptionId = correctOption.id;
   incorrectOptionId = incorrectOption.id;
 
-  const session = await prisma.gameSession.create({
-    data: { quizId, pin: '246810', status: SessionStatus.QUESTION, currentQuestionIndex: 0 }
-  });
+  const sessionPin = String(
+  100000 + Math.floor(Math.random() * 900000)
+);
+
+const session = await prisma.gameSession.create({
+  data: {
+    quizId,
+    pin: sessionPin,
+    status: SessionStatus.QUESTION,
+    currentQuestionIndex: 0,
+  },
+});
   sessionId = session.id;
   const participants = await prisma.participant.createMany({
     data: [
@@ -71,8 +72,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await prisma.$disconnect();
-  rmSync(temporaryDirectory, { recursive: true, force: true });
+  await testDatabase.disconnect();
 });
 
 describe('server-authoritative scoring', () => {
@@ -122,7 +122,13 @@ describe('server-authoritative scoring', () => {
       where: { id: incorrectParticipantId },
       data: { totalScore: 1_000, correctCount: 1 }
     });
-    const otherSession = await prisma.gameSession.create({ data: { quizId, pin: '135790' } });
+    const otherSessionPin = String(
+  100000 + Math.floor(Math.random() * 900000)
+);
+
+const otherSession = await prisma.gameSession.create({
+  data: { quizId, pin: otherSessionPin }
+});
     await prisma.participant.create({ data: { sessionId: otherSession.id, displayName: 'Other session player', totalScore: 1000 } });
     const leaderboard = await getLeaderboard(prisma, sessionId);
     expect(leaderboard[0]).toMatchObject({ rank: 1, displayName: 'Correct player', totalScore: 1_000 });
@@ -134,9 +140,18 @@ describe('server-authoritative scoring', () => {
 
   it('allows only one concurrent finalization to award points', async () => {
     const question = await prisma.question.findFirstOrThrow({ where: { quizId, order: 1 } });
-    const concurrentSession = await prisma.gameSession.create({
-      data: { quizId, pin: '112233', status: SessionStatus.QUESTION, currentQuestionIndex: 0 }
-    });
+    const concurrentSessionPin = String(
+  100000 + Math.floor(Math.random() * 900000)
+);
+
+const concurrentSession = await prisma.gameSession.create({
+  data: {
+    quizId,
+    pin: concurrentSessionPin,
+    status: SessionStatus.QUESTION,
+    currentQuestionIndex: 0
+  }
+});
     const participant = await prisma.participant.create({
       data: { sessionId: concurrentSession.id, displayName: 'Concurrent player' }
     });

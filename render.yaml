@@ -1,0 +1,45 @@
+services:
+  - type: web
+    name: glitch-in-reality-api
+    runtime: node
+    rootDir: apps/game-server
+    buildCommand: npm install && npm run db:generate && npm run build
+    preDeployCommand: npm run db:deploy && npm run db:seed
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: PUBLIC_APP_URL
+        sync: false
+      - key: UPLOAD_DIR
+        value: /var/data/uploads
+      - key: SEED_ADMIN_USERNAME
+        sync: false
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+    disk:
+      name: glitch-in-reality-uploads
+      mountPath: /var/data
+      sizeGB: 1
+
+  - type: static_site
+    name: glitch-in-reality-web
+    rootDir: apps/web
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false
+      - key: VITE_SOCKET_URL
+        sync: false

@@ -1,17 +1,12 @@
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PrismaClient } from '@prisma/client';
 import { createApp } from '../src/app.js';
+import { createTestDatabase } from './test-database.js';
 
-const temporaryDirectory = mkdtempSync(resolve(tmpdir(), 'quiz-platform-api-'));
-const databaseUrl = `file:${resolve(temporaryDirectory, 'test.db')}`;
-const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+const testDatabase = createTestDatabase('auth_quiz_api');
+const prisma = testDatabase.prisma;
 const app = createApp(prisma);
 const secret = process.env.JWT_SECRET ?? 'test-secret-that-is-at-least-32-characters-long';
 let token = '';
@@ -19,22 +14,17 @@ let quizId = '';
 let questionId = '';
 
 beforeAll(async () => {
-  execFileSync(resolve('node_modules/.bin/prisma'), ['migrate', 'deploy'], {
-    cwd: process.cwd(),
-    env: { ...process.env, DATABASE_URL: databaseUrl },
-    stdio: 'pipe'
-  });
+  await testDatabase.migrate();
   await prisma.admin.create({
     data: {
-      username: 'stage4-admin',
+      username: `stage4-admin-${Date.now()}`,
       passwordHash: await bcrypt.hash('correct-password', 12)
     }
   });
 });
 
 afterAll(async () => {
-  await prisma.$disconnect();
-  rmSync(temporaryDirectory, { recursive: true, force: true });
+  await testDatabase.disconnect();
 });
 
 describe('admin authentication', () => {
