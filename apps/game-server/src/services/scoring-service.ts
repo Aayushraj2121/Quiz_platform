@@ -75,218 +75,204 @@ export const finalizeQuestion = async (
   sessionId: string,
   _reason: 'timer' | 'manual'
 ): Promise<FinalizeQuestionResult> => {
-  return prisma.$transaction(
-    async (transaction) => {
-      const session = await transaction.gameSession.findUnique({
-        where: { id: sessionId },
-        select: {
-          id: true,
-          quizId: true,
-          status: true,
-          currentQuestionIndex: true
-        }
-      });
-
-      if (!session) {
-        throw new AppError(404, 'NOT_FOUND', 'Session not found');
+  return prisma.$transaction(async (transaction) => {
+    const session = await transaction.gameSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        quizId: true,
+        status: true,
+        currentQuestionIndex: true
       }
+    });
 
-      if (session.status !== SessionStatus.QUESTION) {
-        const question = await transaction.question.findFirst({
-          where: {
-            quizId: session.quizId,
-            order: session.currentQuestionIndex + 1
-          },
-          select: { id: true }
-        });
+    if (!session) {
+      throw new AppError(404, 'NOT_FOUND', 'Session not found');
+    }
 
-        if (!question) {
-          throw new AppError(400, 'INVALID_QUESTION', 'Active question was not found');
-        }
-
-        return {
-          sessionId,
-          questionId: question.id,
-          status: session.status,
-          finalized: false,
-          awardedPoints: 0,
-          feedback: [],
-          distribution: []
-        };
-      }
-
-      const claimed = await transaction.gameSession.updateMany({
-        where: { id: sessionId, status: SessionStatus.QUESTION },
-        data: {
-          status: SessionStatus.REVEAL,
-          currentQuestionDeadline: null
-        }
-      });
-
+    if (session.status !== SessionStatus.QUESTION) {
       const question = await transaction.question.findFirst({
         where: {
           quizId: session.quizId,
           order: session.currentQuestionIndex + 1
         },
-        select: {
-          id: true,
-          basePoints: true,
-          timerSeconds: true,
-          options: {
-            select: { id: true, isCorrect: true }
-          }
-        }
+        select: { id: true }
       });
-
       if (!question) {
         throw new AppError(400, 'INVALID_QUESTION', 'Active question was not found');
       }
+      return {
+        sessionId,
+        questionId: question.id,
+        status: session.status,
+        finalized: false,
+        awardedPoints: 0,
+        feedback: [],
+        distribution: []
+      };
+    }
 
-      if (claimed.count === 0) {
-        return {
-          sessionId,
-          questionId: question.id,
-          status: SessionStatus.REVEAL,
-          finalized: false,
-          awardedPoints: 0,
-          feedback: [],
-          distribution: []
-        };
+    const claimed = await transaction.gameSession.updateMany({
+      where: { id: sessionId, status: SessionStatus.QUESTION },
+      data: {
+        status: SessionStatus.REVEAL,
+        currentQuestionDeadline: null
       }
+    });
 
-      const correctOptions = question.options.filter((option) => option.isCorrect);
-      if (correctOptions.length !== 1) {
-        throw new AppError(400, 'INVALID_QUESTION', 'Question must have exactly one correct answer');
+    const question = await transaction.question.findFirst({
+      where: {
+        quizId: session.quizId,
+        order: session.currentQuestionIndex + 1
+      },
+      select: {
+        id: true,
+        options: { select: { id: true, isCorrect: true } }
       }
+    });
 
-      const correctOption = correctOptions[0];
-      if (!correctOption) {
-        throw new AppError(400, 'INVALID_QUESTION', 'Question must have exactly one correct answer');
-      }
-      const correctOptionId = correctOption.id;
+    if (!question) {
+      throw new AppError(400, 'INVALID_QUESTION', 'Active question was not found');
+    }
 
-      // Bulk-fetch all answers for this question in this session
-      const answers = await transaction.answer.findMany({
-        where: {
-          questionId: question.id,
-          participant: { sessionId }
-        },
-        select: {
-          id: true,
-          participantId: true,
-          selectedOptionId: true,
-          responseTimeMs: true,
-          awardedPoints: true,
-          participant: {
-            select: {
-              id: true,
-              totalScore: true,
-              correctCount: true,
-              streak: true
-            }
-          }
+    if (claimed.count === 0) {
+      return {
+        sessionId,
+        questionId: question.id,
+        status: SessionStatus.REVEAL,
+        finalized: false,
+        awardedPoints: 0,
+        feedback: [],
+        distribution: []
+      };
+    }
+
+    const correctOptions = question.options.filter((option) => option.isCorrect);
+    if (correctOptions.length !== 1) {
+      throw new AppError(400, 'INVALID_QUESTION', 'Question must have exactly one correct answer');
+    }
+    const correctOption = correctOptions[0];
+    if (!correctOption) {
+      throw new AppError(400, 'INVALID_QUESTION', 'Question must have exactly one correct answer');
+    }
+    const correctOptionId = correctOption.id;
+
+    // ── Fetch question timing ONCE (was fetched once per answer inside the loop) ──
+    const questionWithTiming = await transaction.question.findUniqueOrThrow({
+      where: { id: question.id },
+      select: { basePoints: true, timerSeconds: true }
+    });
+
+    // ── Bulk-fetch all unscored answers with their participant data in one query ──
+    // Filtering on awardedPoints:0 preserves the original idempotency guarantee.
+    const answers = await transaction.answer.findMany({
+      where: {
+        questionId: question.id,
+        participant: { sessionId },
+        awardedPoints: 0
+      },
+      select: {
+        id: true,
+        participantId: true,
+        selectedOptionId: true,
+        responseTimeMs: true,
+        participant: {
+          select: { totalScore: true, correctCount: true, streak: true }
         }
+      }
+    });
+
+    // ── Calculate all scores in memory (zero DB round-trips) ──
+    let awardedPoints = 0;
+    const distribution = new Map<string, number>();
+    const feedback: FinalizeQuestionResult['feedback'] = [];
+
+    interface ScoredAnswer {
+      answerId: string;
+      participantId: string;
+      isCorrect: boolean;
+      points: number;
+      newStreak: number;
+      newTotalScore: number;
+      newCorrectCount: number;
+    }
+    const scoredAnswers: ScoredAnswer[] = [];
+
+    for (const answer of answers) {
+      const isCorrect = answer.selectedOptionId === correctOptionId;
+      distribution.set(answer.selectedOptionId, (distribution.get(answer.selectedOptionId) ?? 0) + 1);
+
+      const remainingRatio = Math.max(
+        0,
+        Math.min(1, (answer.responseTimeMs ?? 0) / (questionWithTiming.timerSeconds * 1000))
+      );
+      const basePoints = isCorrect
+        ? Math.round(questionWithTiming.basePoints * (0.5 + 0.5 * remainingRatio))
+        : 0;
+      const newStreak = isCorrect ? answer.participant.streak + 1 : 0;
+      const streakBonus = isCorrect ? Math.min(500, Math.max(0, newStreak - 2) * 100) : 0;
+      const points = basePoints + streakBonus;
+      const newTotalScore = answer.participant.totalScore + points;
+      const newCorrectCount = answer.participant.correctCount + (isCorrect ? 1 : 0);
+
+      awardedPoints += points;
+      scoredAnswers.push({
+        answerId: answer.id,
+        participantId: answer.participantId,
+        isCorrect,
+        points,
+        newStreak,
+        newTotalScore,
+        newCorrectCount
       });
+      feedback.push({
+        participantId: answer.participantId,
+        questionId: question.id,
+        correct: isCorrect,
+        points,
+        streak: newStreak,
+        totalScore: newTotalScore
+      });
+    }
 
-      // Calculate answer distribution across all submitted answers
-      const distribution = new Map<string, number>();
-      for (const option of question.options) {
-        distribution.set(option.id, 0);
-      }
-      for (const answer of answers) {
-        distribution.set(
-          answer.selectedOptionId,
-          (distribution.get(answer.selectedOptionId) ?? 0) + 1
-        );
-      }
-
-      let awardedPoints = 0;
-      const feedback: FinalizeQuestionResult['feedback'] = [];
-
-      for (const answer of answers) {
-        const isCorrect = answer.selectedOptionId === correctOptionId;
-
-        const remainingRatio = Math.max(
-          0,
-          Math.min(
-            1,
-            (answer.responseTimeMs ?? 0) / (question.timerSeconds * 1000)
-          )
-        );
-        const basePoints = isCorrect
-          ? Math.round(question.basePoints * (0.5 + 0.5 * remainingRatio))
-          : 0;
-
-        const streak = isCorrect ? answer.participant.streak + 1 : 0;
-        const streakBonus = isCorrect
-          ? Math.min(500, Math.max(0, streak - 2) * 100)
-          : 0;
-        const points = basePoints + streakBonus;
-
-        // Atomically claim and score this answer if not already scored
-        const updated = await transaction.answer.updateMany({
-          where: {
-            id: answer.id,
-            awardedPoints: 0
-          },
+    // ── Apply all DB writes concurrently instead of sequentially ──
+    await Promise.all([
+      // Update every scored answer in parallel.
+      ...scoredAnswers.map((sa) =>
+        transaction.answer.update({
+          where: { id: sa.answerId },
+          data: { isCorrect: sa.isCorrect, awardedPoints: sa.points }
+        })
+      ),
+      // Update every participant in parallel.
+      ...scoredAnswers.map((sa) =>
+        transaction.participant.update({
+          where: { id: sa.participantId },
           data: {
-            isCorrect,
-            awardedPoints: points
+            totalScore: sa.newTotalScore,
+            correctCount: sa.newCorrectCount,
+            streak: sa.newStreak
           }
-        });
-
-        if (updated.count !== 1) {
-          continue;
-        }
-
-        // Atomically increment participant score and update streak
-        const updatedParticipant = await transaction.participant.update({
-          where: { id: answer.participantId },
-          data: {
-            totalScore: { increment: points },
-            ...(isCorrect ? { correctCount: { increment: 1 } } : {}),
-            streak
-          },
-          select: {
-            totalScore: true,
-            streak: true
-          }
-        });
-
-        awardedPoints += points;
-
-        feedback.push({
-          participantId: answer.participantId,
-          questionId: question.id,
-          correct: isCorrect,
-          points,
-          streak: updatedParticipant.streak,
-          totalScore: updatedParticipant.totalScore
-        });
-      }
-
-      // Reset streak for participants who did not answer this question
-      await transaction.participant.updateMany({
+        })
+      ),
+      // Reset streak for participants who did not answer this question.
+      transaction.participant.updateMany({
         where: {
           sessionId,
           answers: { none: { questionId: question.id } }
         },
         data: { streak: 0 }
-      });
+      })
+    ]);
 
-      return {
-        sessionId,
-        questionId: question.id,
-        status: SessionStatus.REVEAL,
-        finalized: true,
-        awardedPoints,
-        feedback,
-        distribution: [...distribution.entries()].map(([optionId, count]) => ({ optionId, count }))
-      };
-    },
-    {
-      maxWait: 10_000,
-      timeout: 30_000
-    }
-  );
+    return {
+      sessionId,
+      questionId: question.id,
+      status: SessionStatus.REVEAL,
+      finalized: true,
+      awardedPoints,
+      feedback,
+      distribution: [...distribution.entries()].map(([optionId, count]) => ({ optionId, count }))
+    };
+  });
 };

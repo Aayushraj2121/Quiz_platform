@@ -5,15 +5,14 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
   HOST: z.string().min(1).default('0.0.0.0'),
-  DATABASE_URL: z.string().min(1),
-  DIRECT_URL: z.string().min(1).optional(),
+  DATABASE_URL: z.string().min(1).default('file:./dev.db'),
   JWT_SECRET: z.string().min(32),
-  CORS_ORIGINS: z.string().min(1).default('http://localhost:5173'),
+  CORS_ORIGINS: z.string().min(1).default('http://localhost:3000'),
   UPLOAD_DIR: z.string().min(1).default('./uploads'),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(104_857_600),
   MAX_IMAGE_UPLOAD_BYTES: z.coerce.number().int().positive().default(10_485_760),
   MAX_VIDEO_UPLOAD_BYTES: z.coerce.number().int().positive().default(104_857_600),
-  PUBLIC_APP_URL: z.string().url().default('http://localhost:5173'),
+  PUBLIC_APP_URL: z.string().url().default('http://localhost:3000'),
   MAX_JSON_BODY_SIZE: z.string().min(1).default('1mb')
 });
 
