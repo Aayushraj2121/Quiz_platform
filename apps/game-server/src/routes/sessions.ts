@@ -36,6 +36,40 @@ export const createSessionRouter = (prisma: PrismaClient) => {
     response.json({ success: true, data: await getLeaderboard(prisma, id) });
   });
 
+  router.get('/:id/quiz-questions', requireSessionAccess(prisma), validate(sessionIdParamSchema, 'params'), async (request, response) => {
+    const { id } = sessionIdParamSchema.parse(request.params);
+    const session = await prisma.gameSession.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        status: true,
+        quiz: {
+          select: {
+            id: true,
+            title: true,
+            questions: {
+              orderBy: { order: 'asc' },
+              select: {
+                id: true,
+                order: true,
+                text: true,
+                timerSeconds: true,
+                basePoints: true,
+                mediaAssetId: true,
+                mediaAsset: { select: { mimeType: true } },
+                options: {
+                  select: { id: true, text: true }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+    if (!session) return response.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Session not found' } });
+    response.json({ success: true, data: session.quiz.questions });
+  });
+
   router.use(requireAdmin(prisma));
   router.get('/', validate(sessionPaginationSchema, 'query'), async (request, response) => {
     const { page, pageSize } = sessionPaginationSchema.parse(request.query);

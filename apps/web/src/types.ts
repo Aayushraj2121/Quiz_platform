@@ -10,9 +10,33 @@ export interface Participant {
   id: string;
   participantIdentifier: string;
   displayName: string;
+  email?: string;
   joinedAt?: string;
   totalScore?: number;
   correctCount?: number;
+}
+
+export interface QuizQuestionItem {
+  id: string;
+  order: number;
+  text: string;
+  explanation?: string | null;
+  timerSeconds: number;
+  basePoints: number;
+  mediaAssetId: string | null;
+  mediaAsset?: { mimeType: string } | null;
+  options: Array<{ id: string; text: string }>;
+}
+
+export interface SubmitAnswerResult {
+  questionId: string;
+  isCorrect: boolean;
+  awardedPoints: number;
+  totalScore: number;
+  streak: number;
+  currentRank: number;
+  totalParticipants: number;
+  explanation: string | null;
 }
 
 export interface JoinResponse {

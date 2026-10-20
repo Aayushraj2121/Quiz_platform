@@ -475,44 +475,109 @@ export class RealtimeGameServer {
     if (!parsed.success || socket.data.role !== 'participant' || socket.data.sessionId !== parsed.data.sessionId || !socket.data.participantId) {
       return ackError(socket, ack, 'UNAUTHORIZED', 'Participant authorization is required');
     }
-    const session = await this.prisma.gameSession.findUnique({ where: { id: parsed.data.sessionId }, select: { id: true, status: true, currentQuestionIndex: true, currentQuestionDeadline: true, quizId: true } });
-    if (!session || session.status !== SessionStatus.QUESTION || !session.currentQuestionDeadline || session.currentQuestionDeadline.getTime() <= Date.now()) {
-      return ackError(socket, ack, 'TOO_LATE', 'The question is no longer accepting answers');
+    const session = await this.prisma.gameSession.findUnique({
+      where: { id: parsed.data.sessionId },
+      select: { id: true, status: true, currentQuestionIndex: true, currentQuestionDeadline: true, quizId: true }
+    });
+    if (!session || (session.status !== SessionStatus.QUESTION && session.status !== SessionStatus.REVEAL && session.status !== SessionStatus.LEADERBOARD)) {
+      return ackError(socket, ack, 'TOO_LATE', 'The quiz is not currently active');
     }
-    const question = await this.prisma.question.findFirst({ where: { quizId: session.quizId, id: parsed.data.questionId, order: session.currentQuestionIndex + 1 }, select: { id: true } });
+    const question = await this.prisma.question.findFirst({
+      where: { quizId: session.quizId, id: parsed.data.questionId },
+      select: { id: true, basePoints: true, timerSeconds: true, explanation: true }
+    });
     const option = await this.prisma.questionOption.findFirst({
       where: { id: parsed.data.optionId, questionId: parsed.data.questionId },
       select: { id: true, isCorrect: true }
     });
     if (!question || !option) return ackError(socket, ack, 'INVALID_OPTION', 'The option does not belong to the active question');
-    try {
-      await this.prisma.answer.create({
-        data: {
+
+    // Prevent duplicate answer submission for the same question
+    const existingAnswer = await this.prisma.answer.findUnique({
+      where: {
+        participantId_questionId: {
           participantId: socket.data.participantId,
-          questionId: question.id,
-          selectedOptionId: option.id,
-          isCorrect: option.isCorrect,
-          awardedPoints: 0,
-          responseTimeMs: Math.max(0, session.currentQuestionDeadline.getTime() - Date.now())
+          questionId: question.id
         }
-      });
+      }
+    });
+    if (existingAnswer) {
+      return ackError(socket, ack, 'ALREADY_ANSWERED', 'You have already answered this question');
+    }
+
+    const participant = await this.prisma.participant.findUnique({
+      where: { id: socket.data.participantId },
+      select: { id: true, totalScore: true, correctCount: true, streak: true }
+    });
+    if (!participant) return ackError(socket, ack, 'NOT_FOUND', 'Participant not found');
+
+    const isCorrect = option.isCorrect;
+    const basePoints = isCorrect ? (question.basePoints || 1000) : 0;
+    const newStreak = isCorrect ? participant.streak + 1 : 0;
+    const streakBonus = isCorrect ? Math.min(500, Math.max(0, newStreak - 2) * 100) : 0;
+    const awardedPoints = basePoints + streakBonus;
+    const newTotalScore = participant.totalScore + awardedPoints;
+    const newCorrectCount = participant.correctCount + (isCorrect ? 1 : 0);
+
+    try {
+      await this.prisma.$transaction([
+        this.prisma.answer.create({
+          data: {
+            participantId: participant.id,
+            questionId: question.id,
+            selectedOptionId: option.id,
+            isCorrect,
+            awardedPoints,
+            responseTimeMs: 0
+          }
+        }),
+        this.prisma.participant.update({
+          where: { id: participant.id },
+          data: {
+            totalScore: newTotalScore,
+            correctCount: newCorrectCount,
+            streak: newStreak
+          }
+        })
+      ]);
     } catch (error) {
       const safe = safeError(error);
       return ackError(socket, ack, safe.code, safe.message);
     }
-    // Notify host via O(1) Map lookup instead of scanning all sockets.
+
+    // Calculate current rank & total participants
+    const [higherScorers, totalParticipants] = await Promise.all([
+      this.prisma.participant.count({
+        where: { sessionId: session.id, totalScore: { gt: newTotalScore } }
+      }),
+      this.prisma.participant.count({ where: { sessionId: session.id } })
+    ]);
+    const currentRank = higherScorers + 1;
+
+    // Notify host via O(1) Map lookup
     const hostSocketId = this.hostSockets.get(session.id);
     if (hostSocketId) {
       this.io.to(hostSocketId).emit('answer:received', { participantId: socket.data.participantId, questionId: question.id });
     }
 
-    // Run both count queries concurrently instead of sequentially.
+    // Run count queries concurrently for host progress counter
     const [answered, total] = await Promise.all([
       this.prisma.answer.count({ where: { questionId: question.id, participant: { sessionId: session.id } } }),
-      this.prisma.participant.count({ where: { sessionId: session.id } })
+      totalParticipants
     ]);
     this.io.to(roomFor(session.id)).emit('question:progress', { answered, total });
-    ackSuccess(ack, { questionId: question.id, acceptedAt: new Date().toISOString() });
+
+    ackSuccess(ack, {
+      questionId: question.id,
+      isCorrect,
+      awardedPoints,
+      totalScore: newTotalScore,
+      streak: newStreak,
+      currentRank,
+      totalParticipants,
+      explanation: question.explanation,
+      acceptedAt: new Date().toISOString()
+    });
   }
 
   private startTimer(sessionId: string, questionId: string, deadline: Date): void {

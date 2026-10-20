@@ -1,4 +1,4 @@
-import type { AdminSession, ApiEnvelope, JoinResponse, QuizDetail, QuizQuestion, QuizStatus, QuizSummary, SessionResults } from './types';
+import type { AdminSession, ApiEnvelope, JoinResponse, QuizDetail, QuizQuestion, QuizQuestionItem, QuizStatus, QuizSummary, SessionResults } from './types';
 
 const apiUrl = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:4000/api';
 
@@ -12,10 +12,15 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   return body.data;
 };
 
-export const joinSession = (pin: string, displayName: string) =>
+export const joinSession = (pin: string, displayName: string, email?: string) =>
   request<JoinResponse>(`/sessions/join/${encodeURIComponent(pin)}`, {
     method: 'POST',
-    body: JSON.stringify({ displayName })
+    body: JSON.stringify({ displayName, ...(email ? { email } : {}) })
+  });
+
+export const getQuizQuestions = (sessionId: string, token: string) =>
+  request<QuizQuestionItem[]>(`/sessions/${sessionId}/quiz-questions`, {
+    headers: { Authorization: `Bearer ${token}` }
   });
 
 export const getParticipantResults = (sessionId: string, token: string) =>
