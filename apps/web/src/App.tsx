@@ -450,10 +450,16 @@ function QuestionView({
     return () => clearInterval(timer);
   }, [timeLeft, selectedOption, answerResult]);
 
+  const apiBase = import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api';
   const mediaUrl = question.mediaAssetId
-    ? `${import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:4000/api'}/media/${question.mediaAssetId}`
+    ? `${apiBase}/media/${question.mediaAssetId}`
     : '';
-  const isVideo = mediaUrl && question.mediaAsset?.mimeType?.startsWith('video/');
+  // Support both REST shape (mediaAsset.mimeType) and socket shape (mediaMimeType)
+  const resolvedMimeType =
+    question.mediaAsset?.mimeType ??
+    (question as unknown as { mediaMimeType?: string | null }).mediaMimeType ??
+    null;
+  const isVideo = Boolean(mediaUrl && resolvedMimeType?.startsWith('video/'));
 
   return (
     <div className="question-stage">
