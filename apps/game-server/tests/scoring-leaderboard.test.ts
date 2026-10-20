@@ -1,14 +1,10 @@
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
-import { PrismaClient, QuizStatus, SessionStatus } from '@prisma/client';
+import { QuizStatus, SessionStatus } from '@prisma/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { finalizeQuestion, getLeaderboard } from '../src/services/scoring-service.js';
+import { createTestDatabase } from './test-database.js';
 
-const temporaryDirectory = mkdtempSync(resolve(tmpdir(), 'quiz-platform-scoring-'));
-const databaseUrl = `file:${resolve(temporaryDirectory, 'test.db')}`;
-const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+const testDatabase = createTestDatabase('scoring');
+const prisma = testDatabase.prisma;
 let quizId = '';
 let sessionId = '';
 let correctParticipantId = '';
@@ -17,11 +13,7 @@ let correctOptionId = '';
 let incorrectOptionId = '';
 
 beforeAll(async () => {
-  execFileSync(resolve('node_modules/.bin/prisma'), ['migrate', 'deploy'], {
-    cwd: process.cwd(),
-    env: { ...process.env, DATABASE_URL: databaseUrl },
-    stdio: 'pipe'
-  });
+  await testDatabase.migrate();
   const quiz = await prisma.quiz.create({
     data: {
       title: 'Scoring quiz',
@@ -50,9 +42,18 @@ beforeAll(async () => {
   correctOptionId = correctOption.id;
   incorrectOptionId = incorrectOption.id;
 
-  const session = await prisma.gameSession.create({
-    data: { quizId, pin: '246810', status: SessionStatus.QUESTION, currentQuestionIndex: 0 }
-  });
+  const sessionPin = String(
+  100000 + Math.floor(Math.random() * 900000)
+);
+
+const session = await prisma.gameSession.create({
+  data: {
+    quizId,
+    pin: sessionPin,
+    status: SessionStatus.QUESTION,
+    currentQuestionIndex: 0,
+  },
+});
   sessionId = session.id;
   const participants = await prisma.participant.createMany({
     data: [
@@ -71,8 +72,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await prisma.$disconnect();
-  rmSync(temporaryDirectory, { recursive: true, force: true });
+  await testDatabase.disconnect();
 });
 
 describe('server-authoritative scoring', () => {
@@ -109,6 +109,32 @@ describe('server-authoritative scoring', () => {
     expect(participants.find((participant) => participant.id === correctParticipantId)?.totalScore).toBe(1_000);
     expect(participants.find((participant) => participant.id === incorrectParticipantId)?.totalScore).toBe(0);
     expect(participants.find((participant) => participant.displayName === 'Unanswered player')?.totalScore).toBe(0);
+    expect(result.distribution).toEqual(
+      expect.arrayContaining([
+        { optionId: correctOptionId, count: 1 },
+        { optionId: incorrectOptionId, count: 1 }
+      ])
+    );
+    expect(result.feedback).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          participantId: correctParticipantId,
+          questionId: question.id,
+          correct: true,
+          points: 1_000,
+          streak: 1,
+          totalScore: 1_000
+        }),
+        expect.objectContaining({
+          participantId: incorrectParticipantId,
+          questionId: question.id,
+          correct: false,
+          points: 0,
+          streak: 0,
+          totalScore: 0
+        })
+      ])
+    );
   });
 
   it('is idempotent when reveal/finalization is repeated', async () => {
@@ -122,7 +148,13 @@ describe('server-authoritative scoring', () => {
       where: { id: incorrectParticipantId },
       data: { totalScore: 1_000, correctCount: 1 }
     });
-    const otherSession = await prisma.gameSession.create({ data: { quizId, pin: '135790' } });
+    const otherSessionPin = String(
+  100000 + Math.floor(Math.random() * 900000)
+);
+
+const otherSession = await prisma.gameSession.create({
+  data: { quizId, pin: otherSessionPin }
+});
     await prisma.participant.create({ data: { sessionId: otherSession.id, displayName: 'Other session player', totalScore: 1000 } });
     const leaderboard = await getLeaderboard(prisma, sessionId);
     expect(leaderboard[0]).toMatchObject({ rank: 1, displayName: 'Correct player', totalScore: 1_000 });
@@ -134,9 +166,18 @@ describe('server-authoritative scoring', () => {
 
   it('allows only one concurrent finalization to award points', async () => {
     const question = await prisma.question.findFirstOrThrow({ where: { quizId, order: 1 } });
-    const concurrentSession = await prisma.gameSession.create({
-      data: { quizId, pin: '112233', status: SessionStatus.QUESTION, currentQuestionIndex: 0 }
-    });
+    const concurrentSessionPin = String(
+  100000 + Math.floor(Math.random() * 900000)
+);
+
+const concurrentSession = await prisma.gameSession.create({
+  data: {
+    quizId,
+    pin: concurrentSessionPin,
+    status: SessionStatus.QUESTION,
+    currentQuestionIndex: 0
+  }
+});
     const participant = await prisma.participant.create({
       data: { sessionId: concurrentSession.id, displayName: 'Concurrent player' }
     });
@@ -157,5 +198,105 @@ describe('server-authoritative scoring', () => {
     ]);
     expect(results.filter((result) => result.finalized)).toHaveLength(1);
     expect(await prisma.participant.findUniqueOrThrow({ where: { id: participant.id } }).then((item) => item.totalScore)).toBe(1_000);
+  });
+  it('correctly tracks answer distributions including unselected options, calculates streak bonuses, and skips already-scored answers', async () => {
+    const question2 = await prisma.question.create({
+      data: {
+        quizId,
+        order: 2,
+        text: 'Question 2 for streak and distribution testing',
+        basePoints: 1000,
+        timerSeconds: 30,
+        options: {
+          create: [
+            { text: 'Option A (Correct)', isCorrect: true },
+            { text: 'Option B (Incorrect)', isCorrect: false },
+            { text: 'Option C (Unchosen)', isCorrect: false }
+          ]
+        }
+      },
+      include: { options: true }
+    });
+
+    const optCorrect = question2.options.find((o) => o.isCorrect)!;
+    const optIncorrect = question2.options.find((o) => !o.isCorrect)!;
+    const optUnchosen = question2.options.filter((o) => !o.isCorrect)[1]!;
+
+    const streakSessionPin = String(100000 + Math.floor(Math.random() * 900000));
+    const streakSession = await prisma.gameSession.create({
+      data: {
+        quizId,
+        pin: streakSessionPin,
+        status: SessionStatus.QUESTION,
+        currentQuestionIndex: 1
+      }
+    });
+
+    const streakPlayer = await prisma.participant.create({
+      data: {
+        sessionId: streakSession.id,
+        displayName: 'Streak player',
+        streak: 2,
+        totalScore: 1000,
+        correctCount: 1
+      }
+    });
+
+    const alreadyScoredPlayer = await prisma.participant.create({
+      data: {
+        sessionId: streakSession.id,
+        displayName: 'Already scored player',
+        streak: 1,
+        totalScore: 1000,
+        correctCount: 1
+      }
+    });
+
+    await prisma.answer.create({
+      data: {
+        participantId: streakPlayer.id,
+        questionId: question2.id,
+        selectedOptionId: optCorrect.id,
+        isCorrect: true,
+        awardedPoints: 0,
+        responseTimeMs: 30_000
+      }
+    });
+
+    await prisma.answer.create({
+      data: {
+        participantId: alreadyScoredPlayer.id,
+        questionId: question2.id,
+        selectedOptionId: optIncorrect.id,
+        isCorrect: false,
+        awardedPoints: 1000,
+        responseTimeMs: 30_000
+      }
+    });
+
+    const result = await finalizeQuestion(prisma, streakSession.id, 'manual');
+    expect(result.finalized).toBe(true);
+
+    expect(result.distribution).toEqual(
+      expect.arrayContaining([
+        { optionId: optCorrect.id, count: 1 },
+        { optionId: optIncorrect.id, count: 1 },
+        { optionId: optUnchosen.id, count: 0 }
+      ])
+    );
+
+    expect(result.awardedPoints).toBe(1100);
+
+    const updatedStreakPlayer = await prisma.participant.findUniqueOrThrow({
+      where: { id: streakPlayer.id }
+    });
+    expect(updatedStreakPlayer.streak).toBe(3);
+    expect(updatedStreakPlayer.totalScore).toBe(2100);
+    expect(updatedStreakPlayer.correctCount).toBe(2);
+
+    const updatedAlreadyScoredPlayer = await prisma.participant.findUniqueOrThrow({
+      where: { id: alreadyScoredPlayer.id }
+    });
+    expect(updatedAlreadyScoredPlayer.totalScore).toBe(1000);
   });
 });

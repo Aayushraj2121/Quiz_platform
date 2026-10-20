@@ -10,3 +10,6 @@ apps/game-server/prisma/*.db
 apps/game-server/prisma/*.db-journal
 apps/game-server/prisma/prisma/*.db
 apps/game-server/prisma/prisma/*.db-journal
+apps/web/node_modules/
+apps/web/dist/
+apps/web/tsconfig.tsbuildinfo
