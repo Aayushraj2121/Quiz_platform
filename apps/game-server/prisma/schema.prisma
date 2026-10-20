@@ -130,7 +130,7 @@ model Certificate {
 
 model MediaAsset {
   id           String   @id @default(cuid())
-  filePath     String
+  storageKey   String
   mediaType    MediaType
   originalName String
   mimeType     String
