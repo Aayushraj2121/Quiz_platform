@@ -450,7 +450,7 @@ function QuestionView({
     return () => clearInterval(timer);
   }, [timeLeft, selectedOption, answerResult]);
 
-  const apiBase = import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api';
+  const apiBase = (import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api').replace(/\/+$/, '');
   const mediaUrl = question.mediaAssetId
     ? `${apiBase}/media/${question.mediaAssetId}`
     : '';

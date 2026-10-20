@@ -47,7 +47,10 @@ export const updateQuiz = async (prisma: PrismaClient, id: string, data: Prisma.
 
 export const deleteQuiz = async (prisma: PrismaClient, id: string) => {
   await ensureQuiz(prisma, id);
-  await prisma.quiz.delete({ where: { id } });
+  return prisma.$transaction(async (tx) => {
+    await tx.gameSession.deleteMany({ where: { quizId: id } });
+    return tx.quiz.delete({ where: { id } });
+  });
 };
 
 export const ensureQuiz = async (prisma: PrismaClient, id: string) => {
@@ -123,8 +126,15 @@ export const updateQuestion = async (
 };
 
 export const deleteQuestion = async (prisma: PrismaClient, id: string) => {
-  await getQuestion(prisma, id);
+  const question = await getQuestion(prisma, id);
   await prisma.question.delete({ where: { id } });
+  if (question.mediaAssetId) {
+    try {
+      await prisma.mediaAsset.delete({ where: { id: question.mediaAssetId } });
+    } catch {
+      // ignore if already removed
+    }
+  }
 };
 
 export const createOption = async (prisma: PrismaClient, questionId: string, text: string, isCorrect: boolean) => {
