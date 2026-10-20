@@ -1,16 +1,41 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
-import { getCertificate, getParticipantResults, joinSession, listSessions, loginAdmin } from './api';
+import { getCertificate, getParticipantResults, getQuizQuestions, joinSession } from './api';
 import { createQuizSocket, type QuizSocket } from './socket';
 import { AdminConsole } from './AdminConsole';
-import type { JoinResponse, LeaderboardEntry, PersonalReveal, SafeQuestion, SessionResults, SessionState } from './types';
+import type { JoinResponse, LeaderboardEntry, QuizQuestionItem, SessionResults, SessionState, SubmitAnswerResult } from './types';
 import './styles.css';
 
-type Screen = 'landing' | 'lobby' | 'question' | 'reveal' | 'leaderboard' | 'podium' | 'results';
+type Screen = 'landing' | 'lobby' | 'question' | 'completed' | 'podium' | 'results';
 
 const formatCode = (value: string) => value.replace(/\D/g, '').slice(0, 6);
 
-/** Club logo SVG — inline so it works without a public folder asset */
+/** Shuffles an array randomly (Fisher-Yates) for anti-cheating */
+function shuffleArray<T>(items: T[]): T[] {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const temp = copy[i]!;
+    copy[i] = copy[j]!;
+    copy[j] = temp;
+  }
+  return copy;
+}
+
+/** Formats long display names or emails cleanly */
+function formatEmailOrName(name: string, email?: string): string {
+  const val = (email || name || '').trim();
+  if (val.includes('@')) {
+    const [user, domain] = val.split('@');
+    if (user && domain) {
+      const shortUser = user.length > 10 ? `${user.slice(0, 8)}…` : user;
+      return `${shortUser}@${domain}`;
+    }
+  }
+  return val.length > 18 ? `${val.slice(0, 16)}…` : val;
+}
+
+/** Club logo SVG */
 function ClubLogo({ size = 40 }: { size?: number }) {
   return (
     <img
@@ -43,6 +68,7 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>('landing');
   const [pin, setPin] = useState(() => new URLSearchParams(window.location.search).get('pin')?.replace(/\D/g, '').slice(0, 6) ?? '');
   const [displayName, setDisplayName] = useState('');
+  const [email, setEmail] = useState('');
   const [join, setJoin] = useState<JoinResponse | null>(() => {
     try {
       const stored = sessionStorage.getItem('ctpdf_quiz_join');
@@ -62,78 +88,115 @@ export default function App() {
       }
     } catch {}
   };
+
   const [state, setState] = useState<SessionState | null>(null);
-  const [question, setQuestion] = useState<SafeQuestion | null>(null);
+  const [quizQuestions, setQuizQuestions] = useState<QuizQuestionItem[]>([]);
+  const [currentQIndex, setCurrentQIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
+  const [answerResult, setAnswerResult] = useState<SubmitAnswerResult | null>(null);
+  const [myScore, setMyScore] = useState(0);
+  const [myRank, setMyRank] = useState<number | null>(null);
+  const [totalPlayers, setTotalPlayers] = useState<number | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
-  const [personalReveal, setPersonalReveal] = useState<PersonalReveal | null>(null);
-  const [explanation, setExplanation] = useState<string | null>(null);
   const [results, setResults] = useState<SessionResults | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [remainingMs, setRemainingMs] = useState(0);
+
   const socket = useMemo<QuizSocket | null>(() => {
     if (!join?.connectionToken) return null;
     return createQuizSocket(join.connectionToken, 'participant');
   }, [join?.connectionToken]);
 
+  const loadQuestions = async () => {
+    if (!join) return;
+    try {
+      const list = await getQuizQuestions(join.session.id, join.connectionToken);
+      if (list && list.length > 0) {
+        // Jumble question order AND jumble options per question to prevent cheating
+        const jumbled = shuffleArray(list).map((q) => ({
+          ...q,
+          options: shuffleArray(q.options)
+        }));
+        setQuizQuestions(jumbled);
+        setCurrentQIndex(0);
+        setSelectedOption(null);
+        setAnswerResult(null);
+        setScreen('question');
+      }
+    } catch (cause) {
+      console.error('Failed to load quiz questions', cause);
+    }
+  };
+
   useEffect(() => {
     if (!socket || !join) return;
-    const move = (next: Screen) => setScreen(next);
+
     socket.on('session:state', (next) => {
       setState(next);
-      if (next.status === 'LOBBY') move('lobby');
-      if (next.status === 'QUESTION') move('question');
-      if (next.status === 'REVEAL') move('reveal');
-      if (next.status === 'LEADERBOARD') move('leaderboard');
-      if (next.status === 'PODIUM') move('podium');
-      if (next.status === 'ENDED') move('results');
+      if (next.status === 'LOBBY') {
+        setScreen('lobby');
+      } else if (next.status === 'QUESTION' || next.status === 'REVEAL' || next.status === 'LEADERBOARD') {
+        // Start self-paced quiz if not already answering questions
+        if (quizQuestions.length === 0) {
+          void loadQuestions();
+        }
+      } else if (next.status === 'PODIUM') {
+        setScreen('podium');
+      } else if (next.status === 'ENDED') {
+        void getParticipantResults(join.session.id, join.connectionToken)
+          .then(setResults)
+          .then(() => setScreen('results'))
+          .catch(() => undefined);
+      }
     });
-    socket.on('question:started', (next) => {
-      setQuestion(next);
-      setSelectedOption(null);
-      setPersonalReveal(null);
-      setExplanation(null);
-      setRemainingMs(new Date(next.deadline).getTime() - Date.now());
-      move('question');
+
+    socket.on('question:started', () => {
+      if (quizQuestions.length === 0) {
+        void loadQuestions();
+      }
     });
-    socket.on('question:timer', (next) => setRemainingMs(next.remainingMs));
-    socket.on('leaderboard', (next) => {
+
+    socket.on('leaderboard:updated', (next) => {
       setLeaderboard(next.entries);
-      move('leaderboard');
+      setTotalPlayers(next.entries.length);
+      const myEntry = next.entries.find((e) => e.displayName === join.participant.displayName);
+      if (myEntry) {
+        setMyRank(myEntry.rank);
+        setMyScore(myEntry.totalScore);
+      }
     });
-    socket.on('leaderboard:updated', (next) => setLeaderboard(next.entries));
-    socket.on('reveal', (next) => {
-      setExplanation(next.explanation);
-    });
-    socket.on('reveal:personal', (next) => {
-      setPersonalReveal(next);
-      move('reveal');
-    });
+
     socket.on('podium', (next) => {
       setLeaderboard(next.entries);
-      move('podium');
+      setScreen('podium');
     });
+
     socket.on('game:ended', () => {
-      void getParticipantResults(join.session.id, join.connectionToken).then(setResults).then(() => move('results')).catch(() => undefined);
+      void getParticipantResults(join.session.id, join.connectionToken)
+        .then(setResults)
+        .then(() => setScreen('results'))
+        .catch(() => undefined);
     });
+
     socket.on('connect', () => {
       socket.emit('participant:join-game', { sessionId: join.session.id });
     });
+
     socket.on('session:error', (next) => setError(next.message));
     socket.connect();
+
     return () => {
       socket.removeAllListeners();
       socket.disconnect();
     };
-  }, [join, socket]);
+  }, [join, socket, quizQuestions.length]);
 
   const submitJoin = async (event: FormEvent) => {
     event.preventDefault();
     setError('');
     setLoading(true);
     try {
-      updateJoin(await joinSession(pin, displayName));
+      updateJoin(await joinSession(pin, displayName, email.trim() || undefined));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to join this quiz');
     } finally {
@@ -142,20 +205,52 @@ export default function App() {
   };
 
   const submitAnswer = (optionId: string) => {
-    if (!join || !question || selectedOption) return;
+    const currentQ = quizQuestions[currentQIndex];
+    if (!join || !currentQ || selectedOption) return;
     setSelectedOption(optionId);
-    socket?.emit('participant:submit-answer', {
-      sessionId: join.session.id,
-      questionId: question.questionId,
-      optionId
-    }, (response) => {
-      if (!response.success) setError(response.error?.message ?? 'Answer was not accepted');
-    });
+
+    socket?.emit(
+      'participant:submit-answer',
+      {
+        sessionId: join.session.id,
+        questionId: currentQ.id,
+        optionId
+      },
+      (response) => {
+        if (!response.success) {
+          setError(response.error?.message ?? 'Answer was not accepted');
+          return;
+        }
+        if (response.data) {
+          const res = response.data as SubmitAnswerResult;
+          setAnswerResult(res);
+          setMyScore(res.totalScore);
+          setMyRank(res.currentRank);
+          setTotalPlayers(res.totalParticipants);
+        }
+      }
+    );
+  };
+
+  const nextQuestion = () => {
+    if (currentQIndex < quizQuestions.length - 1) {
+      setCurrentQIndex((prev) => prev + 1);
+      setSelectedOption(null);
+      setAnswerResult(null);
+    } else {
+      setScreen('completed');
+    }
   };
 
   const reset = () => {
     updateJoin(null);
-    setQuestion(null);
+    setQuizQuestions([]);
+    setCurrentQIndex(0);
+    setSelectedOption(null);
+    setAnswerResult(null);
+    setMyScore(0);
+    setMyRank(null);
+    setTotalPlayers(null);
     setLeaderboard([]);
     setResults(null);
     setScreen('landing');
@@ -187,8 +282,8 @@ export default function App() {
               Test Your <span>Cyber</span><br />Knowledge
             </h1>
             <p className="hero-copy">
-              Join a live quiz session hosted by your club. Answer questions in real time,
-              compete on the leaderboard, and earn your certificate.
+              Join a live quiz session hosted by your club. Answer questions at your own speed,
+              watch your rank climb in real time, and earn your verified certificate.
             </p>
           </div>
 
@@ -209,13 +304,23 @@ export default function App() {
                 />
               </label>
               <label>
-                Display name
+                Display name / Nickname
                 <input
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="Your name"
-                  maxLength={40}
+                  placeholder="Your nickname"
+                  maxLength={35}
                   required
+                />
+              </label>
+              <label>
+                Email address <span style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 400 }}>(optional, for certificate)</span>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@college.edu"
+                  maxLength={100}
                 />
               </label>
               {error && <p className="error-text">{error}</p>}
@@ -230,25 +335,65 @@ export default function App() {
     );
   }
 
+  const currentQ = quizQuestions[currentQIndex];
+
   return (
     <main className="app-shell game-shell">
       <header className="topbar">
         <ClubBrand small />
-        <span className="live-chip"><i /> Live Session</span>
-        <span className="participant-name">{join.participant.displayName}</span>
+        <div className="topbar-right">
+          {myRank !== null ? (
+            <span className="rank-badge" title="Your live rank on the leaderboard">
+              🏆 #{myRank}{totalPlayers ? ` / ${totalPlayers}` : ''} · {myScore.toLocaleString()} pts
+            </span>
+          ) : (
+            <span className="live-chip"><i /> Live Session</span>
+          )}
+          <span className="participant-chip" title={join.participant.email || join.participant.displayName}>
+            {formatEmailOrName(join.participant.displayName, join.participant.email)}
+          </span>
+        </div>
       </header>
+
       <section className="game-content">
-        {screen === 'lobby' && <Lobby title={join.session.quiz.title} pin={join.session.pin} participant={join.participant.displayName} />}
-        {screen === 'question' && question && <QuestionView question={question} remainingMs={remainingMs} selectedOption={selectedOption} onAnswer={submitAnswer} />}
-        {screen === 'reveal' && <RevealView reveal={personalReveal} explanation={explanation} />}
-        {screen === 'leaderboard' && <LeaderboardView entries={leaderboard} current={join.participant.displayName} />}
+        {screen === 'lobby' && (
+          <Lobby
+            title={join.session.quiz.title}
+            pin={join.session.pin}
+            participant={join.participant.displayName}
+          />
+        )}
+
+        {screen === 'question' && currentQ && (
+          <QuestionView
+            question={currentQ}
+            questionNumber={currentQIndex + 1}
+            totalQuestions={quizQuestions.length}
+            selectedOption={selectedOption}
+            answerResult={answerResult}
+            onAnswer={submitAnswer}
+            onNext={nextQuestion}
+            isLastQuestion={currentQIndex === quizQuestions.length - 1}
+          />
+        )}
+
+        {screen === 'completed' && (
+          <QuizCompletedView
+            score={myScore}
+            rank={myRank}
+            totalPlayers={totalPlayers}
+            totalQuestions={quizQuestions.length}
+          />
+        )}
+
         {screen === 'podium' && <PodiumView entries={leaderboard} />}
         {screen === 'results' && <ResultsView results={results} token={join.connectionToken} onReset={reset} />}
         {error && <p className="error-text floating-error">{error}</p>}
       </section>
+
       <footer>
         <span>SESSION {state?.sessionId.slice(-6).toUpperCase() ?? join.session.id.slice(-6).toUpperCase()}</span>
-        <span>{state?.status ?? 'LOBBY'}</span>
+        <span>{state?.status ?? 'IN PROGRESS'}</span>
       </footer>
     </main>
   );
@@ -264,28 +409,64 @@ function Lobby({ title, pin, participant }: { title: string; pin: string; partic
         <strong>{pin}</strong>
       </div>
       <p className="muted">
-        Welcome, <b>{participant}</b>. Stay on this screen — the host will start the quiz shortly.
+        Welcome, <b>{participant}</b>. Stay on this screen — the quiz will begin as soon as the host starts!
       </p>
-      <div className="pulse-status"><i /> Waiting for host</div>
+      <div className="pulse-status"><i /> Waiting for host to start…</div>
     </div>
   );
 }
 
-function QuestionView({ question, remainingMs, selectedOption, onAnswer }: { question: SafeQuestion; remainingMs: number; selectedOption: string | null; onAnswer: (id: string) => void }) {
+function QuestionView({
+  question,
+  questionNumber,
+  totalQuestions,
+  selectedOption,
+  answerResult,
+  onAnswer,
+  onNext,
+  isLastQuestion
+}: {
+  question: QuizQuestionItem;
+  questionNumber: number;
+  totalQuestions: number;
+  selectedOption: string | null;
+  answerResult: SubmitAnswerResult | null;
+  onAnswer: (id: string) => void;
+  onNext: () => void;
+  isLastQuestion: boolean;
+}) {
   const [zoomed, setZoomed] = useState(false);
-  const seconds = Math.max(0, Math.ceil(remainingMs / 1000));
-  const mediaUrl = question.mediaAssetId ? `${import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:4000/api'}/media/${question.mediaAssetId}` : '';
-  const isVideo = mediaUrl && question.mediaMimeType?.startsWith('video/');
+  const [timeLeft, setTimeLeft] = useState(question.timerSeconds || 30);
+
+  useEffect(() => {
+    setTimeLeft(question.timerSeconds || 30);
+  }, [question.id, question.timerSeconds]);
+
+  useEffect(() => {
+    if (selectedOption || answerResult || timeLeft <= 0) return;
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [timeLeft, selectedOption, answerResult]);
+
+  const mediaUrl = question.mediaAssetId
+    ? `${import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:4000/api'}/media/${question.mediaAssetId}`
+    : '';
+  const isVideo = mediaUrl && question.mediaAsset?.mimeType?.startsWith('video/');
 
   return (
     <div className="question-stage">
       <div className="question-header">
-        <span>Question {String(question.questionIndex + 1).padStart(2, '0')}</span>
-        <strong className={seconds <= 5 ? 'urgent' : ''}>{seconds}s</strong>
+        <span>
+          Question {String(questionNumber).padStart(2, '0')} of {totalQuestions}
+        </span>
+        <strong className={timeLeft <= 5 ? 'urgent' : ''}>{timeLeft}s</strong>
       </div>
       <div className="progress-track">
-        <span style={{ width: `${Math.min(100, (remainingMs / (question.timerSeconds * 1000)) * 100)}%` }} />
+        <span style={{ width: `${Math.min(100, (timeLeft / (question.timerSeconds || 30)) * 100)}%` }} />
       </div>
+
       <h2>{question.text}</h2>
 
       {mediaUrl && (
@@ -301,7 +482,10 @@ function QuestionView({ question, remainingMs, selectedOption, onAnswer }: { que
                 style={{ cursor: 'zoom-in', maxHeight: '360px', width: 'auto', maxWidth: '100%' }}
                 onClick={() => setZoomed(true)}
               />
-              <span style={{ display: 'inline-block', font: '500 11px var(--mono)', color: 'var(--teal)', marginTop: 8, cursor: 'pointer' }} onClick={() => setZoomed(true)}>
+              <span
+                style={{ display: 'inline-block', font: '500 11px var(--mono)', color: 'var(--teal)', marginTop: 8, cursor: 'pointer' }}
+                onClick={() => setZoomed(true)}
+              >
                 🔍 Tap / Click to inspect in full resolution
               </span>
             </>
@@ -356,71 +540,110 @@ function QuestionView({ question, remainingMs, selectedOption, onAnswer }: { que
               boxShadow: '0 12px 48px rgba(0,0,0,0.85)'
             }}
           />
-          <span style={{ font: '500 11px var(--mono)', color: 'var(--text-muted)', marginTop: 14 }}>
-            Click anywhere to close full screen view
-          </span>
         </div>
       )}
 
       <div className="option-grid">
-        {question.options.map((option, index) => (
-          <button
-            className={`option ${selectedOption === option.id ? 'selected' : ''}`}
-            disabled={Boolean(selectedOption) || seconds === 0}
-            onClick={() => onAnswer(option.id)}
-            key={option.id}
-          >
-            <span>{String.fromCharCode(65 + index)}</span>
-            {option.text}
-          </button>
-        ))}
+        {question.options.map((option, index) => {
+          const isSelected = selectedOption === option.id;
+          let optClass = 'option';
+          if (isSelected) {
+            optClass += ' selected';
+            if (answerResult) {
+              optClass += answerResult.isCorrect ? ' correct-answer' : ' wrong-answer';
+            }
+          }
+          return (
+            <button
+              className={optClass}
+              disabled={Boolean(selectedOption) || timeLeft === 0}
+              onClick={() => onAnswer(option.id)}
+              key={option.id}
+            >
+              <span>{String.fromCharCode(65 + index)}</span>
+              {option.text}
+            </button>
+          );
+        })}
       </div>
-      <p className="muted">
-        {selectedOption ? 'Answer locked — waiting for results.' : 'Choose carefully. Your response time affects your score.'}
-      </p>
-    </div>
-  );
-}
 
-function RevealView({ reveal, explanation }: { reveal: PersonalReveal | null; explanation?: string | null }) {
-  return (
-    <div className="center-stage reveal-stage">
-      <span className="eyebrow">Your Result</span>
-      <div className={`result-icon ${reveal?.correct ? 'correct' : 'wrong'}`}>
-        {reveal?.correct ? '✓' : '✗'}
-      </div>
-      <h2>{reveal?.correct ? 'Correct!' : 'Incorrect'}</h2>
-      <p className="score-callout">
-        {reveal?.points ?? 0}<small> pts</small>
-      </p>
-      <p className="muted">
-        {reveal?.streak ? `${reveal.streak}-answer streak 🔥` : 'Streak reset — get the next one!'}
-      </p>
-      {explanation && (
-        <div className="admin-callout" style={{ textAlign: 'left', margin: '24px auto 16px', maxWidth: 640 }}>
-          <span>FORENSIC BREAKDOWN</span>
-          <p>{explanation}</p>
+      {/* Instant Feedback Banner */}
+      {answerResult && (
+        <div className={`feedback-banner ${answerResult.isCorrect ? 'correct' : 'wrong'}`}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <strong style={{ fontSize: 16 }}>
+              {answerResult.isCorrect ? '✓ Correct Answer!' : '✗ Incorrect'}
+            </strong>
+            <span style={{ font: '700 14px var(--mono)', color: answerResult.isCorrect ? 'var(--teal)' : '#ef4444' }}>
+              {answerResult.isCorrect ? `+${answerResult.awardedPoints} pts` : '+0 pts'}
+            </span>
+          </div>
+          {answerResult.explanation && (
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              <b>Forensic Insight:</b> {answerResult.explanation}
+            </p>
+          )}
         </div>
       )}
-      <div className="pulse-status"><i /> Leaderboard loading…</div>
+
+      {timeLeft === 0 && !selectedOption && (
+        <div className="feedback-banner wrong">
+          <strong>⏱️ Time's up on this question!</strong>
+        </div>
+      )}
+
+      {/* Direct Next Question Action */}
+      {(selectedOption || timeLeft === 0) && (
+        <div style={{ textAlign: 'center', marginTop: 24 }}>
+          <button className="btn-next-question" onClick={onNext}>
+            {isLastQuestion ? 'Complete Quiz ✓' : 'Next Question →'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
-function LeaderboardView({ entries, current }: { entries: LeaderboardEntry[]; current: string }) {
+function QuizCompletedView({
+  score,
+  rank,
+  totalPlayers,
+  totalQuestions
+}: {
+  score: number;
+  rank: number | null;
+  totalPlayers: number | null;
+  totalQuestions: number;
+}) {
   return (
-    <div className="board-stage">
-      <span className="eyebrow">Live Rankings</span>
-      <h2>Leaderboard</h2>
-      <div className="leaderboard">
-        {entries.map((entry) => (
-          <div className={`leader-row ${entry.displayName === current ? 'current' : ''}`} key={entry.participantIdentifier}>
-            <strong>#{entry.rank}</strong>
-            <span>{entry.displayName}</span>
-            <b>{entry.totalScore.toLocaleString()}</b>
-          </div>
-        ))}
+    <div className="center-stage">
+      <span className="eyebrow">All Questions Answered</span>
+      <h2>Quiz Completed! 🎉</h2>
+      <div className="final-score" style={{ margin: '20px auto' }}>
+        <strong>{score.toLocaleString()}</strong>
+        <span>total points earned</span>
       </div>
+      <div
+        style={{
+          margin: '16px auto 24px',
+          padding: '16px 28px',
+          background: 'rgba(255,255,255,0.03)',
+          borderRadius: 10,
+          border: '1px solid var(--border)',
+          maxWidth: 380
+        }}
+      >
+        <p style={{ font: '600 15px var(--mono)', color: 'var(--teal)', margin: 0 }}>
+          {rank !== null ? `Current Position: #${rank} of ${totalPlayers || '—'}` : 'Position calculating…'}
+        </p>
+        <small style={{ color: 'var(--text-dim)', marginTop: 6, display: 'block' }}>
+          {totalQuestions} questions completed
+        </small>
+      </div>
+      <p className="muted" style={{ maxWidth: 440, margin: '0 auto 20px' }}>
+        Your answers have been securely recorded. Please wait for the host to conclude the session to reveal the final podium and download certificates.
+      </p>
+      <div className="pulse-status"><i /> Waiting for host to reveal winners…</div>
     </div>
   );
 }
@@ -434,7 +657,7 @@ function PodiumView({ entries }: { entries: LeaderboardEntry[] }) {
         {entries.slice(0, 3).map((entry, index) => (
           <div className={`podium-place place-${index + 1}`} key={entry.participantIdentifier}>
             <span>0{index + 1}</span>
-            <b>{entry.displayName}</b>
+            <b title={entry.displayName}>{entry.displayName}</b>
             <small>{entry.totalScore.toLocaleString()} pts</small>
           </div>
         ))}
