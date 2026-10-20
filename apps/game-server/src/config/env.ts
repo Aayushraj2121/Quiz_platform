@@ -8,7 +8,11 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1).default('file:./dev.db'),
   JWT_SECRET: z.string().min(32),
   CORS_ORIGINS: z.string().min(1).default('http://localhost:3000'),
-  UPLOAD_DIR: z.string().min(1).default('./uploads'),
+  // Supabase Storage — required for production media uploads
+  SUPABASE_URL: z.string().url(),
+  SUPABASE_SERVICE_KEY: z.string().min(1),
+  SUPABASE_STORAGE_BUCKET: z.string().min(1).default('media'),
+  // Keep upload limits
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(104_857_600),
   MAX_IMAGE_UPLOAD_BYTES: z.coerce.number().int().positive().default(10_485_760),
   MAX_VIDEO_UPLOAD_BYTES: z.coerce.number().int().positive().default(104_857_600),

@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",
+    "@supabase/supabase-js": "^2.50.0",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.3",
     "@types/jsonwebtoken": "^9.0.9",
