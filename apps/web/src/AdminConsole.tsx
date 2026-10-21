@@ -5,6 +5,7 @@ import {
   createQuestion, createQuiz, createSession, deleteQuestion, deleteQuiz, deleteSession, getQuiz, getSessionResults, listQuizzes,
   listSessions, loginAdmin, updateQuiz, uploadMedia, verifyCertificate
 } from './api';
+import { optimizeImageForWeb } from './image-utils';
 import { createQuizSocket, type QuizSocket } from './socket';
 import type { AdminSession, QuizDetail, QuizQuestion, QuizStatus, QuizSummary, SessionResults } from './types';
 
@@ -150,7 +151,10 @@ function QuizWorkspace({ token, quizzes, selectedQuiz, onSelect, onCreated, onUp
     setSaving(true);
     try {
       const created = await createQuestion(token, selectedQuiz.id, question);
-      if (file) await uploadMedia(token, created.id, file);
+      if (file) {
+        const optimized = await optimizeImageForWeb(file);
+        await uploadMedia(token, created.id, optimized);
+      }
       setQuestion({ ...blankQuestion(), order: created.order + 1 }); setFile(null); onUpdated();
     } catch (cause) { onError(cause instanceof Error ? cause.message : 'Unable to add question'); } finally { setSaving(false); }
   };
@@ -305,7 +309,8 @@ function QuestionCard({ question, token, onDeleted, onError }: { question: QuizQ
   const handleUpload = async (file: File) => {
     setUploading(true);
     try {
-      await uploadMedia(token, question.id, file);
+      const optimized = await optimizeImageForWeb(file);
+      await uploadMedia(token, question.id, optimized);
       onDeleted();
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : 'Failed to upload media');
@@ -325,6 +330,8 @@ function QuestionCard({ question, token, onDeleted, onError }: { question: QuizQ
             <img
               src={mediaUrl}
               alt="Question media preview"
+              loading="eager"
+              decoding="async"
               style={{ maxHeight: 90, maxWidth: 160, borderRadius: 6, objectFit: 'contain', border: '1px solid var(--border, #334155)', background: '#0b1329' }}
               onError={(e) => {
                 (e.currentTarget as HTMLImageElement).style.opacity = '0.4';

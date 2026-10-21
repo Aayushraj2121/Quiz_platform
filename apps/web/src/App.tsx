@@ -107,26 +107,50 @@ export default function App() {
     return createQuizSocket(join.connectionToken, 'participant');
   }, [join?.connectionToken]);
 
-  const loadQuestions = async () => {
+  const preloadImages = (items: QuizQuestionItem[]) => {
+    const apiBase = (import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api').replace(/\/+$/, '');
+    items.forEach((q) => {
+      const url = q.mediaUrl || (q.mediaAssetId ? `${apiBase}/media/${q.mediaAssetId}` : null);
+      if (url) {
+        const img = new Image();
+        img.decoding = 'async';
+        img.src = url;
+      }
+    });
+  };
+
+  const loadQuestions = async (startQuiz = true) => {
     if (!join) return;
     try {
       const list = await getQuizQuestions(join.session.id, join.connectionToken);
       if (list && list.length > 0) {
+        // Preload all media assets into browser cache immediately
+        preloadImages(list);
+
         // Jumble question order AND jumble options per question to prevent cheating
         const jumbled = shuffleArray(list).map((q) => ({
           ...q,
           options: shuffleArray(q.options)
         }));
         setQuizQuestions(jumbled);
-        setCurrentQIndex(0);
-        setSelectedOption(null);
-        setAnswerResult(null);
-        setScreen('question');
+        if (startQuiz) {
+          setCurrentQIndex(0);
+          setSelectedOption(null);
+          setAnswerResult(null);
+          setScreen('question');
+        }
       }
     } catch (cause) {
       console.error('Failed to load quiz questions', cause);
     }
   };
+
+  // Preload questions & images in the background the moment participant enters lobby
+  useEffect(() => {
+    if (join?.connectionToken && screen === 'lobby') {
+      void loadQuestions(false);
+    }
+  }, [join?.connectionToken, screen]);
 
   useEffect(() => {
     if (!socket || !join) return;
@@ -138,7 +162,12 @@ export default function App() {
       } else if (next.status === 'QUESTION' || next.status === 'REVEAL' || next.status === 'LEADERBOARD') {
         // Start self-paced quiz if not already answering questions
         if (quizQuestions.length === 0) {
-          void loadQuestions();
+          void loadQuestions(true);
+        } else if (screen === 'lobby') {
+          setCurrentQIndex(0);
+          setSelectedOption(null);
+          setAnswerResult(null);
+          setScreen('question');
         }
       } else if (next.status === 'PODIUM') {
         setScreen('podium');
@@ -152,7 +181,12 @@ export default function App() {
 
     socket.on('question:started', () => {
       if (quizQuestions.length === 0) {
-        void loadQuestions();
+        void loadQuestions(true);
+      } else if (screen === 'lobby') {
+        setCurrentQIndex(0);
+        setSelectedOption(null);
+        setAnswerResult(null);
+        setScreen('question');
       }
     });
 
@@ -485,7 +519,9 @@ function QuestionView({
                 className="question-media"
                 src={mediaUrl}
                 alt="Question media"
-                style={{ cursor: 'zoom-in', maxHeight: '360px', width: 'auto', maxWidth: '100%' }}
+                loading="eager"
+                decoding="async"
+                style={{ cursor: 'zoom-in', maxHeight: '360px', width: 'auto', maxWidth: '100%', minHeight: '140px', background: '#0a101d' }}
                 onClick={() => setZoomed(true)}
               />
               <span
