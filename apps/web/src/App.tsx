@@ -481,22 +481,28 @@ function QuestionView({
   const [zoomed, setZoomed] = useState(false);
   const [timeLeft, setTimeLeft] = useState(question.timerSeconds || 30);
 
-  useEffect(() => {
-    setTimeLeft(question.timerSeconds || 30);
-  }, [question.id, question.timerSeconds]);
-
+  // Single effect: reset timer AND start countdown atomically when question changes.
+  // Keeping them separate caused a race where the interval launched before the
+  // timeLeft state was updated, so Q2 timer would appear to start mid-count.
   useEffect(() => {
     if (selectedOption || answerResult) return;
+
+    const duration = question.timerSeconds || 30;
+    setTimeLeft(duration);           // reset to full duration immediately
+
+    let remaining = duration;
     const timer = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          return 0;
-        }
-        return prev - 1;
-      });
+      remaining -= 1;
+      if (remaining <= 0) {
+        clearInterval(timer);
+        setTimeLeft(0);
+      } else {
+        setTimeLeft(remaining);
+      }
     }, 1000);
+
     return () => clearInterval(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [question.id, selectedOption, answerResult]);
 
   const apiBase = (import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api').replace(/\/+$/, '');
