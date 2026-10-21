@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { getCertificate, getParticipantResults, getQuizQuestions, joinSession } from './api';
 import { createQuizSocket, type QuizSocket } from './socket';
@@ -66,6 +66,8 @@ function ClubBrand({ small = false }: { small?: boolean }) {
 export default function App() {
   const [mode, setMode] = useState<'participant' | 'host'>('participant');
   const [screen, setScreen] = useState<Screen>('landing');
+  const screenRef = useRef(screen);
+  screenRef.current = screen;
   const [pin, setPin] = useState(() => new URLSearchParams(window.location.search).get('pin')?.replace(/\D/g, '').slice(0, 6) ?? '');
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
@@ -91,6 +93,8 @@ export default function App() {
 
   const [state, setState] = useState<SessionState | null>(null);
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestionItem[]>([]);
+  const quizQuestionsRef = useRef(quizQuestions);
+  quizQuestionsRef.current = quizQuestions;
   const [currentQIndex, setCurrentQIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const [answerResult, setAnswerResult] = useState<SubmitAnswerResult | null>(null);
@@ -133,7 +137,7 @@ export default function App() {
           options: shuffleArray(q.options)
         }));
         setQuizQuestions(jumbled);
-        if (startQuiz) {
+        if (startQuiz && screenRef.current === 'lobby') {
           setCurrentQIndex(0);
           setSelectedOption(null);
           setAnswerResult(null);
@@ -161,13 +165,15 @@ export default function App() {
         setScreen('lobby');
       } else if (next.status === 'QUESTION' || next.status === 'REVEAL' || next.status === 'LEADERBOARD') {
         // Start self-paced quiz if not already answering questions
-        if (quizQuestions.length === 0) {
-          void loadQuestions(true);
-        } else if (screen === 'lobby') {
-          setCurrentQIndex(0);
-          setSelectedOption(null);
-          setAnswerResult(null);
-          setScreen('question');
+        if (screenRef.current === 'lobby') {
+          if (quizQuestionsRef.current.length === 0) {
+            void loadQuestions(true);
+          } else {
+            setCurrentQIndex(0);
+            setSelectedOption(null);
+            setAnswerResult(null);
+            setScreen('question');
+          }
         }
       } else if (next.status === 'PODIUM') {
         setScreen('podium');
@@ -180,13 +186,15 @@ export default function App() {
     });
 
     socket.on('question:started', () => {
-      if (quizQuestions.length === 0) {
-        void loadQuestions(true);
-      } else if (screen === 'lobby') {
-        setCurrentQIndex(0);
-        setSelectedOption(null);
-        setAnswerResult(null);
-        setScreen('question');
+      if (screenRef.current === 'lobby') {
+        if (quizQuestionsRef.current.length === 0) {
+          void loadQuestions(true);
+        } else {
+          setCurrentQIndex(0);
+          setSelectedOption(null);
+          setAnswerResult(null);
+          setScreen('question');
+        }
       }
     });
 
@@ -223,7 +231,7 @@ export default function App() {
       socket.removeAllListeners();
       socket.disconnect();
     };
-  }, [join, socket, quizQuestions.length]);
+  }, [join, socket]);
 
   const submitJoin = async (event: FormEvent) => {
     event.preventDefault();
@@ -400,6 +408,7 @@ export default function App() {
 
         {screen === 'question' && currentQ && (
           <QuestionView
+            key={currentQ.id}
             question={currentQ}
             questionNumber={currentQIndex + 1}
             totalQuestions={quizQuestions.length}
@@ -477,12 +486,18 @@ function QuestionView({
   }, [question.id, question.timerSeconds]);
 
   useEffect(() => {
-    if (selectedOption || answerResult || timeLeft <= 0) return;
+    if (selectedOption || answerResult) return;
     const timer = setInterval(() => {
-      setTimeLeft((prev) => Math.max(0, prev - 1));
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          return 0;
+        }
+        return prev - 1;
+      });
     }, 1000);
     return () => clearInterval(timer);
-  }, [timeLeft, selectedOption, answerResult]);
+  }, [question.id, selectedOption, answerResult]);
 
   const apiBase = (import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api').replace(/\/+$/, '');
   const mediaUrl =
